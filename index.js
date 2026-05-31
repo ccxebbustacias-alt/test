@@ -29,7 +29,7 @@ const RAID_THRESH  = 5;
 const NUKE_THRESH  = 3;
 
 // anti-spam
-const SPAM_MSG_LIMIT   = 1;
+
 const SPAM_WINDOW_SEC  = 5;
 const WARN_BEFORE_BAN  = 0;   // warn กี่ครั้งก่อนแบน (0 = แบนทันที)
 
@@ -73,6 +73,7 @@ async function checkSpam(msg) {
   if (count < SPAM_MSG_LIMIT) return;
 
   await logAction(msg.author.id, msg.guild.id, `SPAM detected (${count} ข้อความใน ${SPAM_WINDOW_SEC} วิ)`);
+  console.log(`[Anti-Spam] ${msg.author.tag} (${msg.author.id}) spam detected in ${msg.guild.name} — count: ${count}`);
 
   // ลบข้อความ
   try {
@@ -101,12 +102,17 @@ async function checkSpam(msg) {
     // แบนเลย
     try {
       await msg.member.ban({ deleteMessageSeconds: 3600, reason: `Auto-ban: spam (${warns} ครั้ง)` });
-      log?.send({ embeds: [embed('#ED4245', '🔨 Auto Ban — Spam',
-        `**${msg.author.tag}** (\`${msg.author.id}\`) ถูก ban เนื่องจากสแปมซ้ำ ${warns} ครั้ง ในห้อง <#${msg.channel.id}>`)] });
+      const banEmbed = embed('#ED4245', '🔨 Auto Ban — Spam',
+        `**${msg.author.tag}** (\`${msg.author.id}\`) ถูก ban เนื่องจากสแปมซ้ำ ${warns} ครั้ง ในห้อง <#${msg.channel.id}>`);
+      if (log) log.send({ embeds: [banEmbed] });
+      else msg.channel.send({ embeds: [banEmbed] }).catch(() => {});
       await redis.del(warnKey);
-    } catch {
-      log?.send({ embeds: [embed('#ED4245', '❌ Ban Failed',
-        `ไม่สามารถ ban **${msg.author.tag}** ได้ — ตรวจสอบ permission บอท`)] });
+    } catch (err) {
+      console.error(`[Anti-Spam] Ban failed for ${msg.author.tag} in ${msg.guild.name}:`, err.message);
+      const failEmbed = embed('#ED4245', '❌ Ban Failed',
+        `ไม่สามารถ ban **${msg.author.tag}** (\`${msg.author.id}\`) ได้\nสาเหตุ: \`${err.message}\`\n\nตรวจสอบ: role บอทต้องอยู่เหนือ role ของ user + มีสิทธิ์ Ban Members`);
+      if (log) log.send({ embeds: [failEmbed] });
+      else msg.channel.send({ embeds: [failEmbed] }).catch(() => {});
     }
   }
 }
@@ -145,12 +151,17 @@ async function checkInvite(msg) {
   } else {
     try {
       await msg.member.ban({ deleteMessageSeconds: 3600, reason: `Auto-ban: invite link (${warns} ครั้ง)` });
-      log?.send({ embeds: [embed('#ED4245', '🔨 Auto Ban — Invite Link',
-        `**${msg.author.tag}** (\`${msg.author.id}\`) ถูก ban เนื่องจากส่ง invite link ซ้ำ ${warns} ครั้ง`)] });
+      const banEmbed = embed('#ED4245', '🔨 Auto Ban — Invite Link',
+        `**${msg.author.tag}** (\`${msg.author.id}\`) ถูก ban เนื่องจากส่ง invite link ซ้ำ ${warns} ครั้ง`);
+      if (log) log.send({ embeds: [banEmbed] });
+      else msg.channel.send({ embeds: [banEmbed] }).catch(() => {});
       await redis.del(warnKey);
-    } catch {
-      log?.send({ embeds: [embed('#ED4245', '❌ Ban Failed',
-        `ไม่สามารถ ban **${msg.author.tag}** ได้ — ตรวจสอบ permission บอท`)] });
+    } catch (err) {
+      console.error(`[Anti-Invite] Ban failed for ${msg.author.tag} in ${msg.guild.name}:`, err.message);
+      const failEmbed = embed('#ED4245', '❌ Ban Failed',
+        `ไม่สามารถ ban **${msg.author.tag}** (\`${msg.author.id}\`) ได้\nสาเหตุ: \`${err.message}\`\n\nตรวจสอบ: role บอทต้องอยู่เหนือ role ของ user + มีสิทธิ์ Ban Members`);
+      if (log) log.send({ embeds: [failEmbed] });
+      else msg.channel.send({ embeds: [failEmbed] }).catch(() => {});
     }
   }
 }
