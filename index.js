@@ -362,7 +362,7 @@ client.on('messageCreate', async (msg) => {
       const list = await redis.smembers(wkey) || [];
       if (!list.length) return msg.reply('watchlist ว่างอยู่');
       return msg.channel.send({ embeds: [embed('#FEE75C', '👁 Watchlist',
-        list.map(id => `<@${id}> (\`${id}\\``).join('\n'))] });
+        list.map(id => `<@${id}> (\`${id}\`)`).join('\n'))] });
     }
     return msg.reply('ใช้: `!watchlist add/remove/list`');
   }
