@@ -29,7 +29,7 @@ const RAID_THRESH  = 5;
 const NUKE_THRESH  = 3;
 
 // anti-spam
-const SPAM_MSG_LIMIT   = 5;  // ส่งกี่ข้อความใน SPAM_WINDOW_SEC วิ ถึงจะถือว่าสแปม
+const SPAM_MSG_LIMIT   = 1;  // ส่งข้อความแรกเลย = แบนทันที
 const SPAM_WINDOW_SEC  = 5;
 const WARN_BEFORE_BAN  = 0;   // warn กี่ครั้งก่อนแบน (0 = แบนทันที)
 
@@ -75,14 +75,6 @@ async function checkSpam(msg) {
   await logAction(msg.author.id, msg.guild.id, `SPAM detected (${count} ข้อความใน ${SPAM_WINDOW_SEC} วิ)`);
   console.log(`[Anti-Spam] ${msg.author.tag} (${msg.author.id}) spam detected in ${msg.guild.name} — count: ${count}`);
 
-  // ลบข้อความ
-  try {
-    const msgs     = await msg.channel.messages.fetch({ limit: 20 });
-    const toDelete = msgs.filter(m => m.author.id === msg.author.id && Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
-    if (toDelete.size > 1) await msg.channel.bulkDelete(toDelete);
-    else await msg.delete().catch(() => {});
-  } catch {}
-
   const warnKey = `spamwarn:${msg.guild.id}:${msg.author.id}`;
   const warns   = await redis.incr(warnKey);
   await redis.expire(warnKey, 60 * 60 * 24);
@@ -90,7 +82,13 @@ async function checkSpam(msg) {
   const log = await getLog(msg.guild);
 
   if (warns <= WARN_BEFORE_BAN) {
-    // warn ก่อน
+    // ลบข้อความก่อน แล้วค่อย warn
+    try {
+      const msgs     = await msg.channel.messages.fetch({ limit: 20 });
+      const toDelete = msgs.filter(m => m.author.id === msg.author.id && Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
+      if (toDelete.size > 1) await msg.channel.bulkDelete(toDelete);
+      else await msg.delete().catch(() => {});
+    } catch {}
     const warnMsg = await msg.channel.send({ embeds: [
       embed('#FEE75C', '⚠️ คำเตือน',
         `<@${msg.author.id}> หยุดส่งสแปม! (เตือนครั้งที่ ${warns}/${WARN_BEFORE_BAN})\nอีก ${WARN_BEFORE_BAN - warns + 1} ครั้งจะถูกแบนอัตโนมัติ`)
@@ -99,7 +97,7 @@ async function checkSpam(msg) {
     log?.send({ embeds: [embed('#FEE75C', '⚠️ Spam Warn',
       `**${msg.author.tag}** (\`${msg.author.id}\`) ถูกเตือนสแปมในห้อง <#${msg.channel.id}> (ครั้งที่ ${warns})`)] });
   } else {
-    // แบนเลย
+    // แบนก่อน แล้วค่อยลบข้อความ
     try {
       await msg.member.ban({ deleteMessageSeconds: 3600, reason: `Auto-ban: spam (${warns} ครั้ง)` });
       const banEmbed = embed('#ED4245', '🔨 Auto Ban — Spam',
@@ -107,6 +105,13 @@ async function checkSpam(msg) {
       if (log) log.send({ embeds: [banEmbed] });
       else msg.channel.send({ embeds: [banEmbed] }).catch(() => {});
       await redis.del(warnKey);
+      // ลบข้อความหลังแบนแล้ว
+      try {
+        const msgs     = await msg.channel.messages.fetch({ limit: 20 });
+        const toDelete = msgs.filter(m => m.author.id === msg.author.id && Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
+        if (toDelete.size > 1) await msg.channel.bulkDelete(toDelete);
+        else await msg.delete().catch(() => {});
+      } catch {}
     } catch (err) {
       console.error(`[Anti-Spam] Ban failed for ${msg.author.tag} in ${msg.guild.name}:`, err.message);
       const failEmbed = embed('#ED4245', '❌ Ban Failed',
