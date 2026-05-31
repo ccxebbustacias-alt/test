@@ -381,9 +381,18 @@ client.on('messageCreate', async (msg) => {
   }
 });
 
-// ── keep-alive (สำหรับ Render) ────────────────────────────
+// ── keep-alive (สำหรับ Render Web Service) ───────────────
 const http = require('http');
-http.createServer((_, res) => res.end('ok')).listen(process.env.PORT || 3000);
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('OK');
+});
+
+// เปิด port ก่อน แล้วค่อย login บอท
+// เพื่อให้ Render ตรวจเจอ port ก่อน timeout
+server.listen(process.env.PORT || 3000, () => {
+  console.log(`🌐 HTTP server listening on port ${process.env.PORT || 3000}`);
+  client.login(process.env.DISCORD_TOKEN);
+});
 
 client.once('ready', () => console.log(`✅ ${client.user.tag} online`));
-client.login(process.env.DISCORD_TOKEN);
