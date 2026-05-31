@@ -28,9 +28,9 @@ const RAID_THRESH  = 5;
 const NUKE_THRESH  = 3;
 
 // anti-spam
-const SPAM_MSG_LIMIT   = 5;
+const SPAM_MSG_LIMIT   = 1;
 const SPAM_WINDOW_SEC  = 5;
-const WARN_BEFORE_BAN  = 2;   // warn กี่ครั้งก่อนแบน (0 = แบนทันที)
+const WARN_BEFORE_BAN  = 0;   // warn กี่ครั้งก่อนแบน (0 = แบนทันที)
 
 // anti-invite link
 // ALLOWED_INVITES ใน .env: คั่นด้วย , เช่น  ALLOWED_INVITES=abc123,xyz456
