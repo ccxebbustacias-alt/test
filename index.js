@@ -49,6 +49,7 @@ function embed(color, title, desc) {
 }
 
 function isMod(member) {
+  if (!member) return false;
   return member.permissions.has(PermissionsBitField.Flags.ManageGuild);
 }
 
@@ -63,6 +64,7 @@ async function logAction(userId, guildId, action) {
 // ── anti-spam (ห้อง SPAM_CHANNEL หรือทุกห้องถ้าไม่ตั้งค่า) ──
 async function checkSpam(msg) {
   if (msg.author.bot) return;
+  if (!msg.member) return;
   if (isMod(msg.member)) return;
 
   const key   = `spam:${msg.guild.id}:${msg.author.id}`;
@@ -112,6 +114,7 @@ async function checkSpam(msg) {
 // ── anti-invite link (ทุกห้อง) ────────────────────────────
 async function checkInvite(msg) {
   if (msg.author.bot) return;
+  if (!msg.member) return;
   if (isMod(msg.member)) return;
 
   const matches = [...msg.content.matchAll(INVITE_REGEX)];
