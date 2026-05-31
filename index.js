@@ -20,7 +20,8 @@ const redis = new Redis({
 // ── config ────────────────────────────────────────────────
 const PREFIX       = process.env.PREFIX || '!';
 const LOG_CHANNEL  = process.env.LOG_CHANNEL_ID;
-const SPAM_CHANNEL = process.env.SPAM_CHANNEL_ID;   // ห้องดักสแปม (ถ้าไม่ตั้งค่า = ทุกห้อง)
+const SPAM_CHANNELS = (process.env.SPAM_CHANNEL_ID || '')
+  .split(',').map(id => id.trim()).filter(Boolean); // รองรับหลายห้อง คั่นด้วย ,
 const CACHE_TTL    = 30;
 const SNIPE_CD     = 5000;
 const RAID_WINDOW  = 10;
@@ -222,8 +223,8 @@ client.on('channelDelete', async (channel) => {
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot) return;
 
-  // anti-spam เฉพาะห้อง SPAM_CHANNEL หรือทุกห้องถ้าไม่ตั้งค่า
-  if (!SPAM_CHANNEL || msg.channel.id === SPAM_CHANNEL) {
+  // anti-spam เฉพาะห้องที่ตั้งค่า หรือทุกห้องถ้าไม่ตั้งค่า
+  if (!SPAM_CHANNELS.length || SPAM_CHANNELS.includes(msg.channel.id)) {
     await checkSpam(msg);
   }
 
