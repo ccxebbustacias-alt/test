@@ -29,7 +29,7 @@ const RAID_THRESH  = 5;
 const NUKE_THRESH  = 3;
 
 // anti-spam
-
+const SPAM_MSG_LIMIT   = 5;  // ส่งกี่ข้อความใน SPAM_WINDOW_SEC วิ ถึงจะถือว่าสแปม
 const SPAM_WINDOW_SEC  = 5;
 const WARN_BEFORE_BAN  = 0;   // warn กี่ครั้งก่อนแบน (0 = แบนทันที)
 
