@@ -484,7 +484,7 @@
   }
   .profile-popup {
     position: fixed; z-index: 201;
-    width: 300px;
+    width: 380px;
     background: #1e2029;
     border-radius: 10px;
     box-shadow: 0 16px 48px rgba(0,0,0,0.7);
@@ -563,6 +563,38 @@
     display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap;
   }
   .profile-actions .btn { font-size: 12px; flex: 1; min-width: 70px; justify-content: center; }
+
+  /* ── Popup message feed ── */
+  .popup-msg-feed {
+    display: flex; flex-direction: column; gap: 1px;
+    max-height: 260px; overflow-y: auto;
+    margin-top: 6px;
+  }
+  .popup-msg-item {
+    padding: 6px 8px; border-radius: 5px;
+    font-size: 12px; line-height: 1.4;
+    transition: background 0.1s; cursor: default;
+  }
+  .popup-msg-item:hover { background: #2a2d3a; }
+  .popup-msg-item.deleted-item {
+    background: rgba(237,66,69,.07);
+    border-left: 2px solid var(--red);
+  }
+  .popup-msg-meta {
+    display: flex; align-items: center; gap: 5px;
+    margin-bottom: 2px; flex-wrap: wrap;
+  }
+  .popup-msg-ch {
+    font-size: 10px; color: var(--muted2);
+    background: #2a2d3a; border-radius: 3px; padding: 1px 5px;
+  }
+  .popup-msg-time { font-size: 10px; color: var(--muted); }
+  .popup-msg-del  { font-size: 10px; color: var(--red); font-weight: 600; }
+  .popup-msg-text {
+    color: var(--text); word-break: break-word;
+    white-space: pre-wrap;
+  }
+  .popup-msg-text.is-deleted { text-decoration: line-through; color: var(--muted2); }
 </style>
 </head>
 <body>
@@ -1084,6 +1116,7 @@ function discardSettings() {
 // ── Profile Popup ─────────────────────────────────────────────
 // profileCache เก็บโดย uid, ค่าเป็น profile object + warnSpam/warnInvite
 const profilePopupCache = {};
+let _warnsCache = {}; // gid -> Map(uid -> {spam, invite})
 
 function closeProfilePopup() {
   document.getElementById('profile-overlay').style.display = 'none';
@@ -1100,11 +1133,16 @@ async function showProfilePopup(uid, anchorEl, gid) {
       p = { id: uid, username: uid, displayName: uid, avatar: null };
     }
   }
-  // ดึง warn ถ้ายังไม่มี
+  // ดึง warn ถ้ายังไม่มี (ใช้ cache ระดับ guild เพื่อไม่ต้อง fetch ซ้ำ)
   if (p.warnSpam === undefined && gid) {
     try {
-      const w = await apiFetch(`/api/guild/${gid}/warns`);
-      const entry = (w.warns || []).find(x => x.uid === uid);
+      if (!_warnsCache[gid]) {
+        const w = await apiFetch(`/api/guild/${gid}/warns`);
+        const m = new Map();
+        (w.warns || []).forEach(x => m.set(x.uid, x));
+        _warnsCache[gid] = m;
+      }
+      const entry = _warnsCache[gid].get(uid);
       p = { ...p, warnSpam: entry?.spam || 0, warnInvite: entry?.invite || 0 };
     } catch(_) { p = { ...p, warnSpam: 0, warnInvite: 0 }; }
   }
@@ -1161,10 +1199,17 @@ async function showProfilePopup(uid, anchorEl, gid) {
       <hr class="profile-divider">
       <div class="profile-section-title">สถานะ Warn</div>
       <div class="profile-warn-pills">${warnHtml}</div>
-      <div style="margin-top:12px">
-        <button class="btn btn-ghost btn-sm" style="width:100%;justify-content:center;color:var(--accent);border-color:var(--accent)" onclick="viewUserMessages('${escHtml(uid)}');closeProfilePopup()">💬 ดูประวัติข้อความทั้งหมด</button>
+
+      <hr class="profile-divider">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div class="profile-section-title" style="margin-bottom:0">💬 ข้อความล่าสุด</div>
+        <span id="popup-msg-count" style="font-size:11px;color:var(--muted)">กำลังโหลด...</span>
       </div>
-      <div class="profile-actions" ${gidAttr} data-uid="${escHtml(uid)}">
+      <div class="popup-msg-feed" id="popup-msg-feed">
+        <div style="text-align:center;padding:16px 0"><div class="spinner" style="margin:0 auto"></div></div>
+      </div>
+
+      <div class="profile-actions" ${gidAttr} data-uid="${escHtml(uid)}" style="margin-top:12px">
         <button class="btn btn-sm" style="background:#f97316;color:#fff" onclick="muteFromPopup('${escHtml(uid)}')">🔇 Mute</button>
         <button class="btn btn-ghost btn-sm" onclick="unmuteFromPopup('${escHtml(uid)}')">🔊 Unmute</button>
         <button class="btn btn-danger btn-sm" onclick="banFromPopup('${escHtml(uid)}','${escHtml(displayName)}')">🔨 Ban</button>
@@ -1174,7 +1219,7 @@ async function showProfilePopup(uid, anchorEl, gid) {
   // คำนวณตำแหน่งไม่ให้ออกนอกจอ
   popup.style.display = 'block';
   const rect    = anchorEl.getBoundingClientRect();
-  const popW    = 300, popH = popup.offsetHeight;
+  const popW    = 380, popH = popup.offsetHeight || 500;
   let left = rect.right + 8;
   let top  = rect.top;
   if (left + popW > window.innerWidth  - 8) left = rect.left - popW - 8;
@@ -1184,6 +1229,44 @@ async function showProfilePopup(uid, anchorEl, gid) {
   popup.style.left = left + 'px';
   popup.style.top  = top  + 'px';
   document.getElementById('profile-overlay').style.display = 'block';
+
+  // โหลดข้อความใน background
+  if (gid) loadPopupMessages(uid, gid);
+}
+
+async function loadPopupMessages(uid, gid) {
+  const feed    = document.getElementById('popup-msg-feed');
+  const counter = document.getElementById('popup-msg-count');
+  if (!feed) return;
+  try {
+    const data = await apiFetch(`/api/guild/${gid}/messages?uid=${encodeURIComponent(uid)}`);
+    const msgs = (data.messages || []).slice(0, 30); // แสดงล่าสุด 30
+    if (counter) counter.textContent = `${msgs.length} ข้อความ`;
+    if (!msgs.length) {
+      feed.innerHTML = `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">ไม่มีข้อความที่บันทึกไว้</div>`;
+      return;
+    }
+    feed.innerHTML = msgs.map(m => {
+      const timeStr = new Date(m.ts).toLocaleString('th-TH', {
+        month:'short', day:'numeric',
+        hour:'2-digit', minute:'2-digit'
+      });
+      const delBadge = m.deleted ? `<span class="popup-msg-del">🗑 ลบแล้ว</span>` : '';
+      const content  = m.content?.trim() || '*(ไม่มีข้อความ)*';
+      return `
+        <div class="popup-msg-item${m.deleted ? ' deleted-item' : ''}">
+          <div class="popup-msg-meta">
+            <span class="popup-msg-ch">#${escHtml(m.channel || '?')}</span>
+            <span class="popup-msg-time">${escHtml(timeStr)}</span>
+            ${delBadge}
+          </div>
+          <div class="popup-msg-text${m.deleted ? ' is-deleted' : ''}">${escHtml(content)}</div>
+        </div>`;
+    }).join('');
+  } catch(e) {
+    if (feed) feed.innerHTML = `<div style="padding:10px;color:var(--red);font-size:12px">โหลดไม่ได้</div>`;
+    if (counter) counter.textContent = '';
+  }
 }
 
 async function muteFromPopup(uid) {
@@ -1487,6 +1570,10 @@ async function clearWarnsFromPanel(uid) {
     method: 'POST',
     body: JSON.stringify({ userId: uid }),
   });
+  // invalidate caches
+  delete _warnsCache[currentGuild.id];
+  if (profilePopupCache[uid]) { delete profilePopupCache[uid].warnSpam; delete profilePopupCache[uid].warnInvite; }
+  if (logProfileCache[uid])   { delete logProfileCache[uid].warnSpam;   delete logProfileCache[uid].warnInvite; }
   showToast(`✅ ล้าง warns ของ ${uid} แล้ว`, 'success');
   loadWarns(currentGuild.id);
 }
@@ -1494,6 +1581,12 @@ async function clearWarnsFromPanel(uid) {
 // ── Logs ─────────────────────────────────────────────────────
 let allLogs = [];
 let logProfileCache = {};
+
+// Intl formatters (reuse across calls)
+const _logTimeFmt = new Intl.DateTimeFormat('th-TH', {
+  year:'numeric', month:'numeric', day:'numeric',
+  hour:'2-digit', minute:'2-digit', second:'2-digit',
+});
 
 async function loadLogs(gid) {
   const el = document.getElementById('logs-content');
@@ -1504,9 +1597,9 @@ async function loadLogs(gid) {
     const data = await apiFetch(`/api/guild/${gid}/actionlogs`);
     allLogs = data.logs || [];
     document.getElementById('logs-sub').textContent = `บันทึกล่าสุด ${allLogs.length} รายการ`;
-    // แสดงตารางก่อนเลย (ยังไม่มีรูป)
     renderLogsTable(allLogs);
-    // โหลดโปรไฟล์ใน background แบบ batch ทีละ 5
+
+    // โหลดโปรไฟล์ใน background — แต่ update เฉพาะแถวที่โหลดแล้ว (ไม่ re-render ทั้งตาราง)
     const uniqueUids = [...new Set(allLogs.map(l => l.uid).filter(Boolean))].filter(u => !logProfileCache[u]);
     for (let i = 0; i < uniqueUids.length; i += 5) {
       const batch = uniqueUids.slice(i, i + 5);
@@ -1517,15 +1610,32 @@ async function loadLogs(gid) {
         } catch(_) {
           logProfileCache[uid] = { id: uid, username: uid, displayName: uid, avatar: null };
         }
+        // อัปเดตเฉพาะ cell ของ uid นี้แทนการ re-render ทั้งหมด
+        _updateLogRowsForUid(uid);
       }));
-      // re-render หลังแต่ละ batch เพื่อให้รูปค่อยๆ โผล่
-      const filterUid = document.getElementById('log-uid-input')?.value.trim();
-      const filtered  = filterUid ? allLogs.filter(l => l.uid === filterUid) : allLogs;
-      renderLogsTable(filtered);
     }
   } catch(e) {
     el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
   }
+}
+
+function _updateLogRowsForUid(uid) {
+  const p = logProfileCache[uid];
+  if (!p) return;
+  const name = p.displayName || p.username || uid;
+  document.querySelectorAll(`.log-uid-cell[data-uid="${CSS.escape(uid)}"]`).forEach(cell => {
+    const gid = currentGuild?.id || '';
+    const avatarHtml = p.avatar
+      ? `<img src="${escHtml(p.avatar)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:7px;flex-shrink:0;cursor:pointer" onerror="this.style.display='none'" onclick="showProfilePopup('${escHtml(uid)}',this,'${escHtml(gid)}')">`
+      : `<span style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--accent);align-items:center;justify-content:center;font-weight:700;font-size:12px;margin-right:7px;flex-shrink:0;vertical-align:middle;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${escHtml(gid)}')">${escHtml((name[0]||'?').toUpperCase())}</span>`;
+    cell.innerHTML = `<div style="display:flex;align-items:center">
+      ${avatarHtml}
+      <div>
+        <div style="font-size:13px;font-weight:500">${escHtml(name)}</div>
+        <div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${escHtml(uid)}</div>
+      </div>
+    </div>`;
+  });
 }
 
 function renderLogsTable(logs) {
@@ -1534,44 +1644,69 @@ function renderLogsTable(logs) {
     el.innerHTML = '<p style="color:var(--muted2);padding:20px 0">ไม่พบ log</p>';
     return;
   }
-  el.innerHTML = `
-    <div class="log-card">
-      <table class="log-table">
-        <thead>
-          <tr>
-            <th>เวลา</th>
-            <th>User</th>
-            <th>กิจกรรม</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${logs.map(({ uid, line }) => {
-            const match  = line.match(/^\[(.+?)\]\s(.+)$/);
-            const time   = match ? new Date(match[1]).toLocaleString('th-TH') : '';
-            const action = match ? match[2] : line;
-            const p      = logProfileCache[uid] || {};
-            const name   = p.displayName || p.username || uid;
-            const avatar = p.avatar;
-            const avatarHtml = avatar
-              ? `<img src="${escHtml(avatar)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:7px;flex-shrink:0;cursor:pointer" onerror="this.style.display='none'" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')">`
-              : `<span style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--accent);align-items:center;justify-content:center;font-weight:700;font-size:12px;margin-right:7px;flex-shrink:0;vertical-align:middle;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')">${escHtml((name[0]||'?').toUpperCase())}</span>`;
-            return `<tr>
-              <td class="log-time">${escHtml(time)}</td>
-              <td class="log-uid" style="white-space:nowrap;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')" title="คลิกเพื่อดูโปรไฟล์">
-                <div style="display:flex;align-items:center">
-                  ${avatarHtml}
-                  <div>
-                    <div style="font-size:13px;font-weight:500">${escHtml(name)}</div>
-                    <div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${escHtml(uid)}</div>
-                  </div>
-                </div>
-              </td>
-              <td class="log-action">${escHtml(action)}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
+
+  // Build table structure once
+  const wrapper = document.createElement('div');
+  wrapper.className = 'log-card';
+  const table = document.createElement('table');
+  table.className = 'log-table';
+  table.innerHTML = `<thead><tr><th>เวลา</th><th>User</th><th>กิจกรรม</th></tr></thead>`;
+  const tbody = document.createElement('tbody');
+
+  const gid = currentGuild?.id || '';
+  const frag = document.createDocumentFragment();
+
+  logs.forEach(({ uid, line }) => {
+    const match  = line.match(/^\[(.+?)\]\s(.+)$/);
+    const time   = match ? _logTimeFmt.format(new Date(match[1])) : '';
+    const action = match ? match[2] : line;
+    const p      = logProfileCache[uid] || {};
+    const name   = p.displayName || p.username || uid;
+    const avatar = p.avatar;
+
+    const tr = document.createElement('tr');
+
+    // time cell
+    const tdTime = document.createElement('td');
+    tdTime.className = 'log-time';
+    tdTime.textContent = time;
+
+    // uid cell (will be updated when profile loads)
+    const tdUid = document.createElement('td');
+    tdUid.className = 'log-uid log-uid-cell';
+    tdUid.dataset.uid = uid;
+    tdUid.style.whiteSpace = 'nowrap';
+    tdUid.style.cursor = 'pointer';
+    tdUid.title = 'คลิกเพื่อดูโปรไฟล์';
+    tdUid.onclick = () => showProfilePopup(uid, tdUid, gid);
+
+    const avatarHtml = avatar
+      ? `<img src="${escHtml(avatar)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:7px;flex-shrink:0;cursor:pointer" onerror="this.style.display='none'">`
+      : `<span style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--accent);align-items:center;justify-content:center;font-weight:700;font-size:12px;margin-right:7px;flex-shrink:0;vertical-align:middle;cursor:pointer">${escHtml((name[0]||'?').toUpperCase())}</span>`;
+    tdUid.innerHTML = `<div style="display:flex;align-items:center">
+      ${avatarHtml}
+      <div>
+        <div style="font-size:13px;font-weight:500">${escHtml(name)}</div>
+        <div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${escHtml(uid)}</div>
+      </div>
     </div>`;
+
+    // action cell
+    const tdAction = document.createElement('td');
+    tdAction.className = 'log-action';
+    tdAction.textContent = action;
+
+    tr.appendChild(tdTime);
+    tr.appendChild(tdUid);
+    tr.appendChild(tdAction);
+    frag.appendChild(tr);
+  });
+
+  tbody.appendChild(frag);
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
+  el.innerHTML = '';
+  el.appendChild(wrapper);
 }
 
 function filterLogs() {
@@ -1615,6 +1750,10 @@ async function loadMessages(gid) {
   }
 }
 
+// Intl formatters for messages
+const _msgDateFmt = new Intl.DateTimeFormat('th-TH', { year:'numeric', month:'long', day:'numeric', weekday:'long' });
+const _msgTimeFmt = new Intl.DateTimeFormat('th-TH', { hour:'2-digit', minute:'2-digit' });
+
 function renderMessages(msgs) {
   const el = document.getElementById('messages-content');
   if (!msgs.length) {
@@ -1623,48 +1762,107 @@ function renderMessages(msgs) {
   }
 
   // group by date
-  const groups = {};
+  const groups = new Map();
   msgs.forEach(m => {
-    const d = new Date(m.ts).toLocaleDateString('th-TH', { year:'numeric', month:'long', day:'numeric', weekday:'long' });
-    if (!groups[d]) groups[d] = [];
-    groups[d].push(m);
+    const d = _msgDateFmt.format(new Date(m.ts));
+    if (!groups.has(d)) groups.set(d, []);
+    groups.get(d).push(m);
   });
 
-  let html = '<div class="msg-feed">';
-  for (const [date, list] of Object.entries(groups)) {
-    html += `<div class="msg-group-header">─── ${escHtml(date)} ───</div>`;
+  const feed = document.createElement('div');
+  feed.className = 'msg-feed';
+
+  for (const [date, list] of groups) {
+    const header = document.createElement('div');
+    header.className = 'msg-group-header';
+    header.textContent = `─── ${date} ───`;
+    feed.appendChild(header);
+
     list.forEach(m => {
       const name    = m.tag?.split('#')[0] || m.uid;
-      const timeStr = new Date(m.ts).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit' });
-      const delBadge = m.deleted
-        ? `<span class="msg-deleted-badge">🗑 ถูกลบ${m.deletedAt ? ' เวลา ' + new Date(m.deletedAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}) : ''}</span>`
-        : '';
-      const deletedContentNote = m.deleted
-        ? `<div style="font-size:11px;color:var(--red);margin-top:3px">⚠️ ข้อความนี้ถูกลบแล้ว แต่ยังบันทึกไว้</div>`
-        : '';
-      const avatarHtml = m.avatar
-        ? `<img class="msg-avatar" src="${escHtml(m.avatar)}" onerror="this.outerHTML='<div class=msg-avatar-fallback onclick=showProfilePopup(&#39;${escHtml(m.uid)}&#39;,this,&#39;${currentGuild?.id||''}&#39;)>${escHtml((name[0]||'?').toUpperCase())}</div>'" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">`
-        : `<div class="msg-avatar-fallback" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">${escHtml((name[0]||'?').toUpperCase())}</div>`;
+      const timeStr = _msgTimeFmt.format(new Date(m.ts));
+      const gid     = currentGuild?.id || '';
 
-      html += `
-        <div class="msg-row${m.deleted ? ' deleted' : ''}">
-          ${avatarHtml}
-          <div class="msg-body">
-            <div class="msg-header">
-              <span class="msg-author" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">${escHtml(name)}</span>
-              <span class="msg-uid">${escHtml(m.uid)}</span>
-              <span class="msg-channel">#${escHtml(m.channel)}</span>
-              <span class="msg-time">${escHtml(timeStr)}</span>
-              ${delBadge}
-            </div>
-            <div class="msg-content${m.deleted ? ' deleted-text' : ''}">${escHtml(m.content)}</div>
-            ${deletedContentNote}
-          </div>
-        </div>`;
+      const row = document.createElement('div');
+      row.className = 'msg-row' + (m.deleted ? ' deleted' : '');
+
+      // avatar
+      const avatarEl = document.createElement(m.avatar ? 'img' : 'div');
+      if (m.avatar) {
+        avatarEl.className = 'msg-avatar';
+        avatarEl.src = m.avatar;
+        avatarEl.onerror = function() {
+          const fb = document.createElement('div');
+          fb.className = 'msg-avatar-fallback';
+          fb.onclick = () => showProfilePopup(m.uid, fb, gid);
+          fb.textContent = (name[0]||'?').toUpperCase();
+          this.replaceWith(fb);
+        };
+      } else {
+        avatarEl.className = 'msg-avatar-fallback';
+        avatarEl.textContent = (name[0]||'?').toUpperCase();
+      }
+      avatarEl.onclick = () => showProfilePopup(m.uid, avatarEl, gid);
+
+      // body
+      const body = document.createElement('div');
+      body.className = 'msg-body';
+
+      // header row
+      const hdr = document.createElement('div');
+      hdr.className = 'msg-header';
+
+      const authorEl = document.createElement('span');
+      authorEl.className = 'msg-author';
+      authorEl.textContent = name;
+      authorEl.onclick = () => showProfilePopup(m.uid, authorEl, gid);
+
+      const uidEl = document.createElement('span');
+      uidEl.className = 'msg-uid';
+      uidEl.textContent = m.uid;
+
+      const chEl = document.createElement('span');
+      chEl.className = 'msg-channel';
+      chEl.textContent = '#' + (m.channel || '');
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'msg-time';
+      timeEl.textContent = timeStr;
+
+      hdr.appendChild(authorEl);
+      hdr.appendChild(uidEl);
+      hdr.appendChild(chEl);
+      hdr.appendChild(timeEl);
+
+      if (m.deleted) {
+        const badge = document.createElement('span');
+        badge.className = 'msg-deleted-badge';
+        badge.textContent = '🗑 ถูกลบ' + (m.deletedAt ? ' เวลา ' + _msgTimeFmt.format(new Date(m.deletedAt)) : '');
+        hdr.appendChild(badge);
+      }
+
+      const content = document.createElement('div');
+      content.className = 'msg-content' + (m.deleted ? ' deleted-text' : '');
+      content.textContent = m.content || '';
+
+      body.appendChild(hdr);
+      body.appendChild(content);
+
+      if (m.deleted) {
+        const note = document.createElement('div');
+        note.style.cssText = 'font-size:11px;color:var(--red);margin-top:3px';
+        note.textContent = '⚠️ ข้อความนี้ถูกลบแล้ว แต่ยังบันทึกไว้';
+        body.appendChild(note);
+      }
+
+      row.appendChild(avatarEl);
+      row.appendChild(body);
+      feed.appendChild(row);
     });
   }
-  html += '</div>';
-  el.innerHTML = html;
+
+  el.innerHTML = '';
+  el.appendChild(feed);
 }
 
 // กดดูข้อความของ user คนนั้นจาก profile popup
@@ -1729,8 +1927,12 @@ function showToast(msg, type='') {
 
 // ── Helpers ──────────────────────────────────────────────────
 function escHtml(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
 }
 
 // ── Auto-restore session ─────────────────────────────────────
