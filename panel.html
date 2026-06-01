@@ -866,10 +866,18 @@ async function loadWatchlist(gid) {
   const el = document.getElementById('watchlist-content');
   el.innerHTML = '<div class="spinner"></div>';
   try {
-    const data = await apiFetch(`/api/guild/${gid}`);
+    // ดึง watchlist + โปรไฟล์ Discord จริงพร้อมกัน
+    const [guildData, profileData] = await Promise.all([
+      apiFetch(`/api/guild/${gid}`),
+      apiFetch(`/api/guild/${gid}/watchlist-profiles`).catch(() => ({ profiles: [] })),
+    ]);
+    const list     = guildData.watchlist || [];
+    const profiles = profileData.profiles || [];
+    const profileMap = {};
+    profiles.forEach(p => { profileMap[p.id] = p; });
+
     document.getElementById('watchlist-sub').textContent =
-      `${data.name} — ${data.watchlist.length} คน`;
-    const list = data.watchlist;
+      `${guildData.name} — ${list.length} คน`;
     el.innerHTML = `
       <div style="display:flex;gap:8px;margin-bottom:16px;max-width:400px">
         <input type="text" id="watch-input" placeholder="User ID..." style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:8px 10px;outline:none">
@@ -877,17 +885,28 @@ async function loadWatchlist(gid) {
       </div>
       <div class="watch-list" id="watch-list">
         ${list.length
-          ? list.map(uid => watchItem(uid, gid)).join('')
+          ? list.map(uid => watchItem(uid, gid, profileMap[uid])).join('')
           : '<p style="color:var(--muted2)">ไม่มี user ใน watchlist</p>'}
       </div>`;
   } catch(e) {
     el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
   }
 }
-function watchItem(uid, gid) {
+function watchItem(uid, gid, profile) {
+  const name   = profile?.displayName || profile?.username || uid;
+  const avatar = profile?.avatar;
+  const avatarHtml = avatar
+    ? `<img src="${escHtml(avatar)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">`
+    : `<div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0">${escHtml((name[0]||'?').toUpperCase())}</div>`;
   return `<div class="watch-item" id="wi_${uid}">
-    <span class="watch-uid">👤 ${escHtml(uid)}</span>
-    <div style="display:flex;gap:6px;align-items:center">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">
+      ${avatarHtml}
+      <div style="min-width:0">
+        <div style="font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(name)}</div>
+        <div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${escHtml(uid)}</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
       <select id="mute-min-${uid}" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:12px;padding:4px 8px;outline:none">
         <option value="5">5 นาที</option>
         <option value="10" selected>10 นาที</option>
@@ -908,13 +927,22 @@ async function addToWatchlist() {
     body: JSON.stringify({ action: 'add', userId: uid }),
   });
   document.getElementById('watch-input').value = '';
+  // ดึงโปรไฟล์ Discord จริง
+  let profile = null;
+  try {
+    profile = await apiFetch(`/api/user/${uid}/profile`);
+  } catch(_) {}
   const list = document.getElementById('watch-list');
+  // ลบ placeholder ถ้ามี
+  const empty = list?.querySelector('p');
+  if (empty) empty.remove();
   if (list) {
     const el = document.createElement('div');
-    el.innerHTML = watchItem(uid, currentGuild.id);
+    el.innerHTML = watchItem(uid, currentGuild.id, profile);
     list.prepend(el.firstChild);
   }
-  showToast(`✅ เพิ่ม ${uid} แล้ว`, 'success');
+  const name = profile?.displayName || profile?.username || uid;
+  showToast(`✅ เพิ่ม ${name} แล้ว`, 'success');
 }
 async function removeFromWatchlist(uid, gid) {
   await apiFetch(`/api/guild/${gid}/watchlist`, {
@@ -1084,6 +1112,7 @@ async function clearWarnsFromPanel(uid) {
 
 // ── Logs ─────────────────────────────────────────────────────
 let allLogs = [];
+let logProfileCache = {};
 
 async function loadLogs(gid) {
   const el = document.getElementById('logs-content');
@@ -1094,6 +1123,19 @@ async function loadLogs(gid) {
     const data = await apiFetch(`/api/guild/${gid}/actionlogs`);
     allLogs = data.logs || [];
     document.getElementById('logs-sub').textContent = `บันทึกล่าสุด ${allLogs.length} รายการ`;
+
+    // ดึงโปรไฟล์ Discord สำหรับทุก uid ที่ไม่ซ้ำ
+    const uniqueUids = [...new Set(allLogs.map(l => l.uid).filter(Boolean))];
+    await Promise.allSettled(uniqueUids.map(async uid => {
+      if (logProfileCache[uid]) return;
+      try {
+        const p = await apiFetch(`/api/user/${uid}/profile`);
+        logProfileCache[uid] = p;
+      } catch(_) {
+        logProfileCache[uid] = { id: uid, username: uid, displayName: uid, avatar: null };
+      }
+    }));
+
     renderLogsTable(allLogs);
   } catch(e) {
     el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
@@ -1112,18 +1154,32 @@ function renderLogsTable(logs) {
         <thead>
           <tr>
             <th>เวลา</th>
-            <th>User ID</th>
+            <th>User</th>
             <th>กิจกรรม</th>
           </tr>
         </thead>
         <tbody>
           ${logs.map(({ uid, line }) => {
-            const match = line.match(/^\[(.+?)\]\s(.+)$/);
+            const match  = line.match(/^\[(.+?)\]\s(.+)$/);
             const time   = match ? new Date(match[1]).toLocaleString('th-TH') : '';
             const action = match ? match[2] : line;
+            const p      = logProfileCache[uid] || {};
+            const name   = p.displayName || p.username || uid;
+            const avatar = p.avatar;
+            const avatarHtml = avatar
+              ? `<img src="${escHtml(avatar)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:7px;flex-shrink:0" onerror="this.style.display='none'">`
+              : `<span style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--accent);align-items:center;justify-content:center;font-weight:700;font-size:12px;margin-right:7px;flex-shrink:0;vertical-align:middle">${escHtml((name[0]||'?').toUpperCase())}</span>`;
             return `<tr>
               <td class="log-time">${escHtml(time)}</td>
-              <td class="log-uid" onclick="filterByUid('${escHtml(uid)}')" title="คลิกเพื่อกรองเฉพาะ user นี้">${escHtml(uid)}</td>
+              <td class="log-uid" onclick="filterByUid('${escHtml(uid)}')" title="คลิกเพื่อกรองเฉพาะ user นี้" style="cursor:pointer;white-space:nowrap">
+                <div style="display:flex;align-items:center">
+                  ${avatarHtml}
+                  <div>
+                    <div style="font-size:13px;font-weight:500">${escHtml(name)}</div>
+                    <div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${escHtml(uid)}</div>
+                  </div>
+                </div>
+              </td>
               <td class="log-action">${escHtml(action)}</td>
             </tr>`;
           }).join('')}
@@ -1137,8 +1193,17 @@ function filterLogs() {
   if (!uid) { renderLogsTable(allLogs); return; }
   renderLogsTable(allLogs.filter(l => l.uid === uid));
 }
-function filterByUid(uid) {
+async function filterByUid(uid) {
   document.getElementById('log-uid-input').value = uid;
+  // โหลดโปรไฟล์ถ้ายังไม่มีใน cache
+  if (!logProfileCache[uid]) {
+    try {
+      const p = await apiFetch(`/api/user/${uid}/profile`);
+      logProfileCache[uid] = p;
+    } catch(_) {
+      logProfileCache[uid] = { id: uid, username: uid, displayName: uid, avatar: null };
+    }
+  }
   filterLogs();
 }
 function clearLogFilter() {
