@@ -1,1829 +1,714 @@
-<!DOCTYPE html>
-<html lang="th">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Secure Bot — Panel</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+require('dotenv').config();
+const {
+  Client, GatewayIntentBits, Partials, Events,
+  PermissionFlagsBits, ChannelType, AuditLogEvent,
+} = require('discord.js');
+const { Redis } = require('@upstash/redis');
+const http = require('http');
+const fs   = require('fs');
+const path = require('path');
+const url  = require('url');
 
-  :root {
-    --bg:        #0d0f12;
-    --surface:   #13161b;
-    --surface2:  #1a1e26;
-    --border:    #252a35;
-    --border2:   #2e3545;
-    --accent:    #5865f2;
-    --accent2:   #4752c4;
-    --green:     #3ba55d;
-    --red:       #ed4245;
-    --yellow:    #faa61a;
-    --text:      #e8eaf0;
-    --muted:     #6b7280;
-    --muted2:    #9ca3af;
-    --sidebar-w: 220px;
-  }
+// ─── Config ───────────────────────────────────────────────────────────────────
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const PANEL_TOKEN   = process.env.PANEL_TOKEN   || 'changeme';
+const PORT          = parseInt(process.env.PORT) || 3000;
 
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'IBM Plex Sans Thai', sans-serif;
-    font-size: 14px;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* ── Login Screen ── */
-  #login-screen {
-    position: fixed; inset: 0;
-    background: var(--bg);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 100;
-    flex-direction: column; gap: 24px;
-  }
-  #login-screen .logo {
-    font-size: 22px; font-weight: 600; letter-spacing: -0.5px;
-    display: flex; align-items: center; gap: 8px;
-  }
-  #login-screen .logo span { color: var(--accent); }
-  .login-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 28px 32px;
-    width: 360px;
-    display: flex; flex-direction: column; gap: 16px;
-  }
-  .login-card h2 { font-size: 16px; font-weight: 600; }
-  .login-card p  { color: var(--muted2); font-size: 13px; }
-
-  /* ── Layout ── */
-  #app { display: none; flex: 1; }
-  #app.visible { display: flex; }
-
-  /* ── Sidebar ── */
-  .sidebar {
-    width: var(--sidebar-w);
-    background: var(--surface);
-    border-right: 1px solid var(--border);
-    display: flex; flex-direction: column;
-    position: fixed; top: 0; left: 0; height: 100vh;
-    z-index: 10;
-  }
-  .sidebar-logo {
-    padding: 16px 18px;
-    border-bottom: 1px solid var(--border);
-    font-weight: 600; font-size: 15px;
-    display: flex; align-items: center; gap: 8px;
-    color: var(--text);
-  }
-  .sidebar-logo .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
-
-  .sidebar-section { padding: 12px 10px 4px; }
-  .sidebar-label {
-    font-size: 10px; font-weight: 600; letter-spacing: 0.8px;
-    color: var(--muted); text-transform: uppercase;
-    padding: 0 8px 6px;
-  }
-  .sidebar-btn {
-    display: flex; align-items: center; gap: 10px;
-    padding: 7px 10px; border-radius: 6px; width: 100%;
-    background: none; border: none; color: var(--muted2);
-    font-family: inherit; font-size: 13px; cursor: pointer;
-    transition: all 0.15s; text-align: left;
-  }
-  .sidebar-btn:hover { background: var(--surface2); color: var(--text); }
-  .sidebar-btn.active { background: var(--accent); color: #fff; }
-  .sidebar-btn .icon { font-size: 15px; width: 18px; text-align: center; }
-
-  .sidebar-footer {
-    margin-top: auto; padding: 12px;
-    border-top: 1px solid var(--border);
-  }
-
-  /* ── Main Content ── */
-  .main {
-    margin-left: var(--sidebar-w);
-    flex: 1; display: flex; flex-direction: column;
-  }
-  .topbar {
-    height: 52px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 24px; position: sticky; top: 0; z-index: 5;
-  }
-  .topbar-left { display: flex; align-items: center; gap: 12px; }
-  .guild-selector {
-    display: flex; align-items: center; gap: 10px;
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 6px 12px; cursor: pointer;
-    transition: border-color 0.15s; position: relative;
-  }
-  .guild-selector:hover { border-color: var(--border2); }
-  .guild-selector img {
-    width: 22px; height: 22px; border-radius: 50%; object-fit: cover;
-  }
-  .guild-selector .name { font-size: 13px; font-weight: 500; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .guild-selector .arrow { color: var(--muted); font-size: 10px; }
-
-  /* ── Guild Dropdown ── */
-  .guild-dropdown {
-    position: absolute; top: calc(100% + 6px); left: 0;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px; padding: 6px;
-    min-width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-    display: none; z-index: 50;
-  }
-  .guild-dropdown.open { display: block; }
-  .guild-item {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 10px; border-radius: 6px; cursor: pointer;
-    transition: background 0.1s;
-  }
-  .guild-item:hover { background: var(--surface2); }
-  .guild-item img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
-  .guild-item .gname { font-size: 13px; font-weight: 500; }
-  .guild-item .gmem  { font-size: 11px; color: var(--muted2); }
-  .guild-fallback {
-    width: 32px; height: 32px; border-radius: 50%;
-    background: var(--accent); display: flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 600; color: #fff; flex-shrink: 0;
-  }
-
-  /* ── Page Container ── */
-  .page { display: none; padding: 28px 28px 48px; }
-  .page.active { display: block; }
-
-  .page-title {
-    font-size: 20px; font-weight: 600; margin-bottom: 4px;
-  }
-  .page-sub { color: var(--muted2); font-size: 13px; margin-bottom: 24px; }
-
-  /* ── Server Select Page ── */
-  .guild-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 14px;
-  }
-  .guild-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px; padding: 20px 16px;
-    display: flex; flex-direction: column; align-items: center; gap: 10px;
-    cursor: pointer; transition: all 0.15s;
-    text-align: center;
-  }
-  .guild-card:hover {
-    border-color: var(--accent); background: var(--surface2);
-    transform: translateY(-2px);
-  }
-  .guild-card img { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; }
-  .guild-card .gc-name { font-size: 13px; font-weight: 500; line-height: 1.3; }
-  .guild-card .gc-mem  { font-size: 11px; color: var(--muted2); }
-
-  /* ── Settings Page ── */
-  .settings-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-    gap: 16px;
-  }
-  .settings-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px; padding: 20px;
-  }
-  .settings-card-title {
-    font-size: 13px; font-weight: 600;
-    display: flex; align-items: center; gap: 8px;
-    margin-bottom: 16px; padding-bottom: 12px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  /* form controls */
-  .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
-  .field:last-child { margin-bottom: 0; }
-  .field label { font-size: 12px; color: var(--muted2); font-weight: 500; }
-  .field input, .field select {
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 7px; color: var(--text);
-    font-family: inherit; font-size: 13px; padding: 8px 10px;
-    transition: border-color 0.15s; outline: none; width: 100%;
-  }
-  .field input:focus, .field select:focus { border-color: var(--accent); }
-  .field select option { background: var(--surface2); }
-  .field input[type=number] { font-family: 'IBM Plex Mono', monospace; }
-
-  /* toggle */
-  .toggle-row {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 8px 0; border-bottom: 1px solid var(--border);
-  }
-  .toggle-row:last-child { border-bottom: none; padding-bottom: 0; }
-  .toggle-label { font-size: 13px; display: flex; align-items: center; gap: 7px; }
-  .toggle-label .ticon { font-size: 15px; }
-  .toggle {
-    position: relative; width: 36px; height: 20px;
-    flex-shrink: 0;
-  }
-  .toggle input { opacity: 0; width: 0; height: 0; }
-  .toggle-slider {
-    position: absolute; inset: 0; border-radius: 20px;
-    background: var(--border2); cursor: pointer;
-    transition: background 0.2s;
-  }
-  .toggle-slider::before {
-    content: ''; position: absolute;
-    width: 14px; height: 14px; border-radius: 50%;
-    background: #fff; left: 3px; top: 3px;
-    transition: transform 0.2s;
-  }
-  .toggle input:checked + .toggle-slider { background: var(--accent); }
-  .toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
-
-  /* tags input for allowedInvites */
-  .tags-wrap {
-    display: flex; flex-wrap: wrap; gap: 5px;
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 7px; padding: 6px 8px; min-height: 38px;
-  }
-  .tag {
-    background: var(--accent2); color: #fff;
-    border-radius: 4px; padding: 2px 7px;
-    font-size: 12px; display: flex; align-items: center; gap: 4px;
-  }
-  .tag button {
-    background: none; border: none; color: #ccc; cursor: pointer;
-    font-size: 12px; padding: 0; line-height: 1;
-  }
-  .tag button:hover { color: #fff; }
-  .tags-input {
-    background: none; border: none; color: var(--text);
-    font-family: inherit; font-size: 13px; outline: none;
-    flex: 1; min-width: 80px;
-  }
-
-  /* multi-select channels */
-  .ch-select {
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 7px; max-height: 130px; overflow-y: auto;
-  }
-  .ch-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 7px 10px; cursor: pointer; transition: background 0.1s;
-  }
-  .ch-item:hover { background: var(--surface); }
-  .ch-item input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; }
-  .ch-item label { font-size: 13px; cursor: pointer; flex: 1; }
-
-  /* save bar */
-  .save-bar {
-    position: fixed; bottom: 0; left: var(--sidebar-w); right: 0;
-    background: var(--surface); border-top: 1px solid var(--border);
-    padding: 12px 28px;
-    display: flex; align-items: center; justify-content: space-between;
-    transform: translateY(100%); transition: transform 0.2s;
-    z-index: 20;
-  }
-  .save-bar.visible { transform: translateY(0); }
-  .save-bar-msg { font-size: 13px; color: var(--muted2); }
-
-  /* buttons */
-  .btn {
-    padding: 8px 18px; border-radius: 7px; border: none;
-    font-family: inherit; font-size: 13px; font-weight: 500;
-    cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px;
-  }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { background: var(--accent2); }
-  .btn-danger  { background: var(--red);   color: #fff; }
-  .btn-danger:hover { background: #c53030; }
-  .btn-ghost   { background: transparent; color: var(--muted2); border: 1px solid var(--border); }
-  .btn-ghost:hover { background: var(--surface2); color: var(--text); }
-  .btn-sm { padding: 5px 12px; font-size: 12px; }
-
-  /* badge / status */
-  .badge {
-    display: inline-block; padding: 2px 8px; border-radius: 20px;
-    font-size: 11px; font-weight: 600;
-  }
-  .badge-green { background: rgba(59,165,93,.2); color: var(--green); }
-  .badge-red   { background: rgba(237,66,69,.2); color: var(--red); }
-  .badge-blue  { background: rgba(88,101,242,.2); color: var(--accent); }
-
-  /* toast */
-  .toast {
-    position: fixed; bottom: 72px; right: 24px;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 8px; padding: 10px 16px;
-    font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.3);
-    transform: translateY(20px); opacity: 0; transition: all 0.25s;
-    z-index: 999; pointer-events: none;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .toast.show { transform: translateY(0); opacity: 1; }
-  .toast.success { border-color: var(--green); }
-  .toast.error   { border-color: var(--red); }
-
-  /* watchlist */
-  .watch-list { display: flex; flex-direction: column; gap: 6px; }
-  .watch-item {
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 7px; padding: 8px 12px;
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .watch-uid { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--muted2); }
-
-  /* new accounts */
-  .newacc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-  .newacc-card {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; padding: 16px;
-    display: flex; flex-direction: column; gap: 12px;
-  }
-  .newacc-card.flagged { border-color: var(--red); }
-  .newacc-header { display: flex; align-items: center; gap: 10px; }
-  .newacc-avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface2); }
-  .newacc-avatar-fallback {
-    width: 44px; height: 44px; border-radius: 50%;
-    background: var(--accent2); display: flex; align-items: center; justify-content: center;
-    font-size: 18px; font-weight: 600; color: #fff; flex-shrink: 0;
-  }
-  .newacc-tag { font-size: 13px; font-weight: 600; }
-  .newacc-id  { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted2); }
-  .newacc-info { display: flex; flex-direction: column; gap: 4px; }
-  .newacc-row { display: flex; justify-content: space-between; font-size: 12px; }
-  .newacc-label { color: var(--muted2); }
-  .newacc-value { font-weight: 500; }
-  .newacc-age-warn { color: var(--red); font-weight: 700; }
-  .newacc-actions { display: flex; gap: 8px; }
-
-  /* logs table */
-  .log-table { width: 100%; border-collapse: collapse; }
-  .log-table th {
-    text-align: left; font-size: 11px; font-weight: 600;
-    color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 8px 12px; border-bottom: 1px solid var(--border);
-  }
-  .log-table td {
-    padding: 8px 12px; border-bottom: 1px solid var(--border);
-    font-size: 12px; vertical-align: top;
-  }
-  .log-table tr:last-child td { border-bottom: none; }
-  .log-table tr:hover td { background: var(--surface2); }
-  .log-uid  { font-family: 'IBM Plex Mono', monospace; color: var(--accent); cursor:pointer; white-space: nowrap; }
-  .log-uid:hover { text-decoration: underline; }
-  .log-time { color: var(--muted2); white-space: nowrap; }
-  .log-action { color: var(--text); line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-width: 600px; }
-  .log-card {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; overflow: hidden;
-  }
-
-  /* warns table */
-  .warn-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
-  .warn-row:last-child { border-bottom: none; }
-  .warn-row:hover { background: var(--surface2); }
-  .warn-uid2 { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--muted2); flex: 1; }
-  .warn-badge { min-width: 90px; display: flex; gap: 6px; }
-  .warn-num { font-weight: 600; font-size: 13px; }
-  .warn-label { font-size: 11px; color: var(--muted2); }
-
-  /* loading spinner */
-  .spinner {
-    width: 20px; height: 20px; border-radius: 50%;
-    border: 2px solid var(--border2); border-top-color: var(--accent);
-    animation: spin 0.6s linear infinite; margin: 40px auto;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* scrollbar */
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
-
-  /* ── Chat Message Log ── */
-  .msg-feed {
-    display: flex; flex-direction: column; gap: 2px;
-    max-width: 900px;
-  }
-  .msg-row {
-    display: flex; align-items: flex-start; gap: 12px;
-    padding: 6px 12px; border-radius: 6px;
-    transition: background 0.1s;
-  }
-  .msg-row:hover { background: var(--surface2); }
-  .msg-row.deleted {
-    background: rgba(237,66,69,.07);
-    border-left: 3px solid var(--red);
-  }
-  .msg-avatar {
-    width: 36px; height: 36px; border-radius: 50%;
-    object-fit: cover; flex-shrink: 0; cursor: pointer;
-    margin-top: 1px;
-  }
-  .msg-avatar-fallback {
-    width: 36px; height: 36px; border-radius: 50%;
-    background: var(--accent); display: flex;
-    align-items: center; justify-content: center;
-    font-weight: 700; font-size: 14px; color: #fff;
-    flex-shrink: 0; cursor: pointer; margin-top: 1px;
-  }
-  .msg-body { flex: 1; min-width: 0; }
-  .msg-header {
-    display: flex; align-items: baseline; gap: 8px;
-    margin-bottom: 2px; flex-wrap: wrap;
-  }
-  .msg-author {
-    font-weight: 600; font-size: 13px; color: var(--accent);
-    cursor: pointer;
-  }
-  .msg-author:hover { text-decoration: underline; }
-  .msg-uid {
-    font-size: 10px; color: var(--muted);
-    font-family: 'IBM Plex Mono', monospace;
-  }
-  .msg-time {
-    font-size: 11px; color: var(--muted);
-  }
-  .msg-channel {
-    font-size: 11px; color: var(--muted2);
-    background: var(--surface2); border-radius: 4px;
-    padding: 1px 6px;
-  }
-  .msg-deleted-badge {
-    font-size: 10px; font-weight: 700; color: var(--red);
-    background: rgba(237,66,69,.15); border-radius: 4px;
-    padding: 1px 6px; letter-spacing: 0.3px;
-  }
-  .msg-content {
-    font-size: 13px; color: var(--text); line-height: 1.5;
-    word-break: break-word; white-space: pre-wrap;
-  }
-  .msg-content.deleted-text {
-    text-decoration: line-through; color: var(--muted2);
-  }
-  .msg-group-header {
-    font-size: 11px; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: 0.7px;
-    padding: 14px 12px 6px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 4px;
-  }
-
-  input::placeholder { color: var(--muted); }
-
-  /* ── Profile Popup (Discord style) ── */
-  .profile-overlay {
-    position: fixed; inset: 0; z-index: 200;
-    background: transparent;
-  }
-  .profile-popup {
-    position: fixed; z-index: 201;
-    width: 380px;
-    background: #1e2029;
-    border-radius: 10px;
-    box-shadow: 0 16px 48px rgba(0,0,0,0.7);
-    overflow: hidden;
-    animation: popIn 0.15s ease;
-  }
-  @keyframes popIn {
-    from { opacity:0; transform: scale(0.92) translateY(6px); }
-    to   { opacity:1; transform: scale(1) translateY(0); }
-  }
-  .profile-banner {
-    height: 72px; width: 100%;
-    object-fit: cover; display: block;
-  }
-  .profile-banner-color {
-    height: 72px; width: 100%;
-  }
-  .profile-avatar-wrap {
-    position: relative; margin: -32px 0 0 14px;
-  }
-  .profile-avatar {
-    width: 80px; height: 80px; border-radius: 50%;
-    border: 6px solid #1e2029;
-    background: #313338; object-fit: cover;
-    display: block;
-  }
-  .profile-avatar-fallback {
-    width: 80px; height: 80px; border-radius: 50%;
-    border: 6px solid #1e2029;
-    background: var(--accent);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 28px; font-weight: 700; color: #fff;
-  }
-  .profile-badge-bot {
-    position: absolute; bottom: 2px; right: -2px;
-    background: #5865f2; border-radius: 4px;
-    font-size: 10px; font-weight: 700; color: #fff;
-    padding: 1px 5px; letter-spacing: 0.3px;
-  }
-  .profile-body {
-    padding: 10px 16px 16px;
-  }
-  .profile-display-name {
-    font-size: 20px; font-weight: 700; line-height: 1.2;
-    margin-top: 8px; word-break: break-word;
-  }
-  .profile-username {
-    font-size: 14px; color: var(--muted2); margin-top: 2px;
-  }
-  .profile-divider {
-    border: none; border-top: 1px solid #2e3545;
-    margin: 12px 0;
-  }
-  .profile-section-title {
-    font-size: 11px; font-weight: 700; letter-spacing: 0.7px;
-    text-transform: uppercase; color: var(--muted2);
-    margin-bottom: 6px;
-  }
-  .profile-info-row {
-    font-size: 13px; color: var(--muted2);
-    display: flex; align-items: center; gap: 6px;
-    margin-bottom: 4px;
-  }
-  .profile-info-row strong { color: var(--text); }
-  .profile-warn-pills {
-    display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;
-  }
-  .profile-warn-pill {
-    font-size: 11px; font-weight: 600; padding: 3px 8px;
-    border-radius: 20px; display: flex; align-items: center; gap: 4px;
-  }
-  .profile-warn-pill.spam   { background: rgba(237,66,69,.18); color: #ed4245; }
-  .profile-warn-pill.invite { background: rgba(250,166,26,.18); color: #faa61a; }
-  .profile-warn-pill.clean  { background: rgba(59,165,93,.15); color: #3ba55d; }
-  .profile-actions {
-    display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap;
-  }
-  .profile-actions .btn { font-size: 12px; flex: 1; min-width: 70px; justify-content: center; }
-
-  /* ── Popup message feed ── */
-  .popup-msg-feed {
-    display: flex; flex-direction: column; gap: 1px;
-    max-height: 260px; overflow-y: auto;
-    margin-top: 6px;
-  }
-  .popup-msg-item {
-    padding: 6px 8px; border-radius: 5px;
-    font-size: 12px; line-height: 1.4;
-    transition: background 0.1s; cursor: default;
-  }
-  .popup-msg-item:hover { background: #2a2d3a; }
-  .popup-msg-item.deleted-item {
-    background: rgba(237,66,69,.07);
-    border-left: 2px solid var(--red);
-  }
-  .popup-msg-meta {
-    display: flex; align-items: center; gap: 5px;
-    margin-bottom: 2px; flex-wrap: wrap;
-  }
-  .popup-msg-ch {
-    font-size: 10px; color: var(--muted2);
-    background: #2a2d3a; border-radius: 3px; padding: 1px 5px;
-  }
-  .popup-msg-time { font-size: 10px; color: var(--muted); }
-  .popup-msg-del  { font-size: 10px; color: var(--red); font-weight: 600; }
-  .popup-msg-text {
-    color: var(--text); word-break: break-word;
-    white-space: pre-wrap;
-  }
-  .popup-msg-text.is-deleted { text-decoration: line-through; color: var(--muted2); }
-</style>
-</head>
-<body>
-
-<!-- Login -->
-<div id="login-screen">
-  <div class="logo">🛡️ <span>Secure</span>Bot Panel</div>
-  <div class="login-card">
-    <h2>เข้าสู่ระบบ</h2>
-    <p>ใส่ PANEL_TOKEN จาก .env ของคุณ</p>
-    <div class="field">
-      <label>Panel Token</label>
-      <input type="password" id="token-input" placeholder="your-panel-token" />
-    </div>
-    <div class="field">
-      <label>Bot API URL</label>
-      <input type="text" id="url-input" placeholder="https://your-bot.onrender.com" />
-    </div>
-    <button class="btn btn-primary" onclick="doLogin()" style="width:100%">เข้าสู่ระบบ</button>
-    <p id="login-err" style="color:var(--red);font-size:12px;display:none"></p>
-  </div>
-</div>
-
-<!-- App -->
-<div id="app">
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <div class="sidebar-logo">
-      <div class="dot"></div> SecureBot Panel
-    </div>
-    <div class="sidebar-section">
-      <div class="sidebar-label">เมนู</div>
-      <button class="sidebar-btn active" onclick="navTo('servers')" id="nav-servers">
-        <span class="icon">🖥️</span> เลือกเซิร์ฟ
-      </button>
-      <button class="sidebar-btn" onclick="navTo('settings')" id="nav-settings">
-        <span class="icon">⚙️</span> ตั้งค่าบอท
-      </button>
-      <button class="sidebar-btn" onclick="navTo('watchlist')" id="nav-watchlist">
-        <span class="icon">👁️</span> Watchlist
-      </button>
-      <button class="sidebar-btn" onclick="navTo('warns')" id="nav-warns">
-        <span class="icon">⚠️</span> Warns
-      </button>
-      <button class="sidebar-btn" onclick="navTo('newaccs')" id="nav-newaccs">
-        <span class="icon">🆕</span> บัญชีน่าสงสัย
-      </button>
-      <button class="sidebar-btn" onclick="navTo('logs')" id="nav-logs">
-        <span class="icon">📋</span> ประวัติ Logs
-      </button>
-      <button class="sidebar-btn" onclick="navTo('messages')" id="nav-messages">
-        <span class="icon">💬</span> ข้อความทั้งหมด
-      </button>
-    </div>
-    <div class="sidebar-footer">
-      <button class="sidebar-btn" onclick="logout()" style="color:var(--red)">
-        <span class="icon">🚪</span> ออกจากระบบ
-      </button>
-    </div>
-  </aside>
-
-  <!-- Main -->
-  <div class="main">
-    <div class="topbar">
-      <div class="topbar-left">
-        <div class="guild-selector" onclick="toggleGuildDropdown()">
-          <img id="top-guild-icon" src="" style="display:none">
-          <div class="guild-fallback" id="top-guild-fallback" style="width:22px;height:22px;font-size:10px">?</div>
-          <span class="name" id="top-guild-name">เลือกเซิร์ฟเวอร์</span>
-          <span class="arrow">▼</span>
-          <div class="guild-dropdown" id="guild-dropdown"></div>
-        </div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <span class="badge badge-green" id="bot-status">● ออนไลน์</span>
-      </div>
-    </div>
-
-    <!-- Pages -->
-    <div class="page active" id="page-servers">
-      <div class="page-title">เซิร์ฟเวอร์ทั้งหมด</div>
-      <div class="page-sub">เลือกเซิร์ฟเวอร์ที่ต้องการตั้งค่า</div>
-      <div class="guild-grid" id="guild-grid">
-        <div class="spinner"></div>
-      </div>
-    </div>
-
-    <div class="page" id="page-settings">
-      <div class="page-title">⚙️ ตั้งค่าบอท</div>
-      <div class="page-sub" id="settings-sub">กำลังโหลด...</div>
-      <div id="settings-content"><div class="spinner"></div></div>
-    </div>
-
-    <div class="page" id="page-watchlist">
-      <div class="page-title">👁️ Watchlist</div>
-      <div class="page-sub" id="watchlist-sub">รายการ User ที่ถูกจับตาดู</div>
-      <div id="watchlist-content"><div class="spinner"></div></div>
-    </div>
-
-    <div class="page" id="page-warns">
-      <div class="page-title">⚠️ Warns</div>
-      <div class="page-sub" id="warns-sub">สรุปการเตือนทั้งหมดในเซิร์ฟ</div>
-      <div id="warns-content"><div class="spinner"></div></div>
-    </div>
-
-    <div class="page" id="page-newaccs">
-      <div class="page-title">🆕 บัญชีน่าสงสัย</div>
-      <div class="page-sub" id="newaccs-sub">บัญชีอายุน้อยกว่า 30 วันที่เข้าเซิร์ฟ</div>
-      <div id="newaccs-content"><div class="spinner"></div></div>
-    </div>
-
-    <div class="page" id="page-logs">
-      <div class="page-title">📋 ประวัติ Logs</div>
-      <div class="page-sub" id="logs-sub">บันทึกกิจกรรมของ User ทั้งหมด</div>
-      <div style="display:flex;gap:8px;margin-bottom:16px;max-width:480px" id="logs-search-bar" style="display:none">
-        <input type="text" id="log-uid-input" placeholder="กรอง User ID..." style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:8px 10px;outline:none">
-        <button class="btn btn-primary btn-sm" onclick="filterLogs()">🔍 กรอง</button>
-        <button class="btn btn-ghost btn-sm" onclick="clearLogFilter()">✕ ล้าง</button>
-      </div>
-      <div id="logs-content"><div class="spinner"></div></div>
-    </div>
-
-    <div class="page" id="page-messages">
-      <div class="page-title">💬 ข้อความทั้งหมด</div>
-      <div class="page-sub" id="messages-sub">บันทึกข้อความทุกอย่างที่พิมพ์ในเซิร์ฟ (500 ล่าสุด)</div>
-      <!-- Filter bar -->
-      <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center" id="msg-filter-bar">
-        <input type="text" id="msg-uid-input" placeholder="User ID..." style="width:180px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 10px;outline:none">
-        <input type="text" id="msg-ch-input" placeholder="ชื่อห้อง..." style="width:160px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 10px;outline:none">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted2);cursor:pointer">
-          <input type="checkbox" id="msg-del-only" style="accent-color:var(--red);width:14px;height:14px"> เฉพาะที่ถูกลบ 🗑
-        </label>
-        <button class="btn btn-primary btn-sm" onclick="filterMessages()">🔍 กรอง</button>
-        <button class="btn btn-ghost btn-sm" onclick="clearMsgFilter()">✕ ล้าง</button>
-      </div>
-      <div id="messages-content"><div class="spinner"></div></div>
-    </div>
-  </div>
-</div>
-
-<!-- Save Bar -->
-<div class="save-bar" id="save-bar">
-  <span class="save-bar-msg">⚠️ มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก</span>
-  <div style="display:flex;gap:8px">
-    <button class="btn btn-ghost btn-sm" onclick="discardSettings()">ยกเลิก</button>
-    <button class="btn btn-primary btn-sm" onclick="saveSettings()">💾 บันทึก</button>
-  </div>
-</div>
-
-<!-- Toast -->
-<div class="toast" id="toast"></div>
-
-<!-- Profile Popup -->
-<div class="profile-overlay" id="profile-overlay" style="display:none" onclick="closeProfilePopup()"></div>
-<div class="profile-popup" id="profile-popup" style="display:none"></div>
-
-<script>
-// ── State ──────────────────────────────────────────────────
-let API = '';
-let TOKEN = '';
-let guilds = [];
-let currentGuild = null;
-let currentSettings = null;
-let originalSettings = null;
-let dirty = false;
-
-// ── Auth ────────────────────────────────────────────────────
-function doLogin() {
-  TOKEN = document.getElementById('token-input').value.trim();
-  API   = document.getElementById('url-input').value.trim().replace(/\/$/, '');
-  if (!TOKEN || !API) return showLoginErr('กรุณากรอกข้อมูลให้ครบ');
-  localStorage.setItem('panel_token', TOKEN);
-  localStorage.setItem('panel_url', API);
-  initApp();
-}
-function logout() {
-  localStorage.clear();
-  location.reload();
-}
-function showLoginErr(msg) {
-  const el = document.getElementById('login-err');
-  el.textContent = msg; el.style.display = 'block';
-}
-async function initApp() {
-  try {
-    const data = await apiFetch('/api/guilds');
-    guilds = data;
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').classList.add('visible');
-    renderGuildGrid();
-    renderGuildDropdown();
-  } catch(e) {
-    showLoginErr('เชื่อมต่อไม่ได้ — ตรวจสอบ URL และ Token');
-  }
-}
-
-// ── API ─────────────────────────────────────────────────────
-async function apiFetch(path, opts = {}) {
-  const res = await fetch(API + path, {
-    ...opts,
-    headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...(opts.headers||{}) },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-// ── Navigation ──────────────────────────────────────────────
-function navTo(page) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.sidebar-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('page-' + page).classList.add('active');
-  document.getElementById('nav-' + page).classList.add('active');
-  if (page === 'settings' && currentGuild) loadSettings(currentGuild.id);
-  if (page === 'watchlist' && currentGuild) loadWatchlist(currentGuild.id);
-  if (page === 'warns'    && currentGuild) loadWarns(currentGuild.id);
-  if (page === 'newaccs'  && currentGuild) loadNewAccs(currentGuild.id);
-  if (page === 'logs'     && currentGuild) loadLogs(currentGuild.id);
-  if (page === 'messages' && currentGuild) loadMessages(currentGuild.id);
-}
-
-// ── Guild Selector ──────────────────────────────────────────
-function toggleGuildDropdown() {
-  document.getElementById('guild-dropdown').classList.toggle('open');
-}
-document.addEventListener('click', e => {
-  if (!e.target.closest('.guild-selector'))
-    document.getElementById('guild-dropdown').classList.remove('open');
+// ─── Redis ────────────────────────────────────────────────────────────────────
+const redis = new Redis({
+  url:   process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-function selectGuild(guild) {
-  currentGuild = guild;
-  document.getElementById('guild-dropdown').classList.remove('open');
-  const icon = document.getElementById('top-guild-icon');
-  const fallback = document.getElementById('top-guild-fallback');
-  if (guild.icon) {
-    icon.src = guild.icon; icon.style.display = '';
-    fallback.style.display = 'none';
+// ─── Discord Client ───────────────────────────────────────────────────────────
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildModeration,
+  ],
+  partials: [Partials.Message, Partials.Channel, Partials.GuildMember],
+});
+
+// ─── In-memory spam tracker ───────────────────────────────────────────────────
+// spamMap[guildId][userId] = [timestamps]
+const spamMap = {};
+// raidMap[guildId] = [timestamps]
+const raidMap = {};
+// nukeMap[guildId] = { channelDeletes: [ts] }
+const nukeMap = {};
+
+// ─── Default settings ─────────────────────────────────────────────────────────
+function defaultSettings() {
+  return {
+    antiSpam:       true,
+    antiInvite:     true,
+    antiToken:      true,
+    antiGhostPing:  true,
+    raidProtect:    true,
+    nukeProtect:    true,
+    logChannelId:   '',
+    spamMsgLimit:   5,
+    spamWindowSec:  5,
+    warnBeforeBan:  3,
+    spamChannelIds: [],
+    raidThresh:     10,
+    raidWindow:     10,
+    nukeThresh:     3,
+    allowedInvites: [],
+    logNotify: {
+      spam:       true,
+      invite:     true,
+      token:      true,
+      ghostPing:  true,
+      watchlist:  true,
+      raid:       true,
+      nuke:       true,
+      newAccount: true,
+      memberJoin: false,
+      mute:       false,
+      ban:        true,
+    },
+  };
+}
+
+// ─── Redis helpers ────────────────────────────────────────────────────────────
+async function getSettings(guildId) {
+  const raw = await redis.get(`settings:${guildId}`);
+  const def = defaultSettings();
+  if (!raw) return def;
+  const saved = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  return { ...def, ...saved, logNotify: { ...def.logNotify, ...(saved.logNotify || {}) } };
+}
+async function saveSettings(guildId, settings) {
+  await redis.set(`settings:${guildId}`, JSON.stringify(settings));
+}
+
+async function getWarns(guildId) {
+  const raw = await redis.get(`warns:${guildId}`);
+  if (!raw) return {};
+  return typeof raw === 'string' ? JSON.parse(raw) : raw;
+}
+async function saveWarns(guildId, warns) {
+  await redis.set(`warns:${guildId}`, JSON.stringify(warns));
+}
+
+async function addWarn(guildId, userId, type) {
+  const warns = await getWarns(guildId);
+  if (!warns[userId]) warns[userId] = { spam: 0, invite: 0 };
+  warns[userId][type] = (warns[userId][type] || 0) + 1;
+  await saveWarns(guildId, warns);
+  return warns[userId];
+}
+
+async function getWatchlist(guildId) {
+  const raw = await redis.get(`watchlist:${guildId}`);
+  if (!raw) return [];
+  return typeof raw === 'string' ? JSON.parse(raw) : raw;
+}
+async function saveWatchlist(guildId, list) {
+  await redis.set(`watchlist:${guildId}`, JSON.stringify(list));
+}
+
+async function getNewAccs(guildId) {
+  const raw = await redis.get(`newaccs:${guildId}`);
+  if (!raw) return [];
+  return typeof raw === 'string' ? JSON.parse(raw) : raw;
+}
+async function saveNewAccs(guildId, list) {
+  await redis.set(`newaccs:${guildId}`, JSON.stringify(list));
+}
+
+async function getDismissed(guildId) {
+  const raw = await redis.get(`dismissed:${guildId}`);
+  if (!raw) return [];
+  return typeof raw === 'string' ? JSON.parse(raw) : raw;
+}
+
+// Action logs (สูงสุด 500 รายการ)
+async function appendActionLog(guildId, userId, text) {
+  const key  = `actionlogs:${guildId}`;
+  const line = `[${new Date().toISOString()}] ${text}`;
+  const raw  = await redis.get(key);
+  const logs = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : [];
+  logs.unshift({ uid: userId, line });
+  if (logs.length > 500) logs.length = 500;
+  await redis.set(key, JSON.stringify(logs));
+}
+
+// Message store (สูงสุด 500 ข้อความ)
+async function storeMessage(guildId, msgObj) {
+  const key = `messages:${guildId}`;
+  const raw = await redis.get(key);
+  const msgs = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : [];
+  msgs.unshift(msgObj);
+  if (msgs.length > 500) msgs.length = 500;
+  await redis.set(key, JSON.stringify(msgs));
+}
+async function getMessages(guildId) {
+  const raw = await redis.get(`messages:${guildId}`);
+  if (!raw) return [];
+  return typeof raw === 'string' ? JSON.parse(raw) : raw;
+}
+
+// ─── Discord helpers ──────────────────────────────────────────────────────────
+async function sendLog(guild, settings, embed) {
+  if (!settings.logChannelId) return;
+  try {
+    const ch = await guild.channels.fetch(settings.logChannelId);
+    if (ch) await ch.send({ embeds: [embed] });
+  } catch (_) {}
+}
+
+function makeEmbed(color, title, description, fields = []) {
+  return {
+    color,
+    title,
+    description,
+    fields,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+async function muteUser(guild, userId, minutes, reason) {
+  let muteRole = guild.roles.cache.find(r => r.name === 'Muted');
+  if (!muteRole) {
+    muteRole = await guild.roles.create({
+      name: 'Muted',
+      permissions: [],
+      reason: 'Auto-created by SecureBot',
+    });
+    for (const [, ch] of guild.channels.cache) {
+      try {
+        await ch.permissionOverwrites.create(muteRole, {
+          SendMessages: false,
+          AddReactions: false,
+          Speak: false,
+        });
+      } catch (_) {}
+    }
+  }
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member) throw new Error('ไม่พบ user');
+  await member.roles.add(muteRole, reason);
+  if (minutes > 0) {
+    setTimeout(async () => {
+      try { await member.roles.remove(muteRole); } catch (_) {}
+    }, minutes * 60 * 1000);
+  }
+}
+
+async function unmuteUser(guild, userId) {
+  const muteRole = guild.roles.cache.find(r => r.name === 'Muted');
+  if (!muteRole) return;
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member) throw new Error('ไม่พบ user');
+  await member.roles.remove(muteRole);
+}
+
+// ─── Anti-Spam ────────────────────────────────────────────────────────────────
+async function checkSpam(message, settings) {
+  const { guildId, author, channelId } = message;
+  if (!settings.antiSpam) return;
+  if (settings.spamChannelIds.length && !settings.spamChannelIds.includes(channelId)) return;
+
+  if (!spamMap[guildId]) spamMap[guildId] = {};
+  if (!spamMap[guildId][author.id]) spamMap[guildId][author.id] = [];
+
+  const now    = Date.now();
+  const window = settings.spamWindowSec * 1000;
+  spamMap[guildId][author.id] = spamMap[guildId][author.id].filter(t => now - t < window);
+  spamMap[guildId][author.id].push(now);
+
+  if (spamMap[guildId][author.id].length >= settings.spamMsgLimit) {
+    spamMap[guildId][author.id] = [];
+    const guild  = message.guild;
+    const member = await guild.members.fetch(author.id).catch(() => null);
+    if (!member) return;
+
+    const warns = await addWarn(guildId, author.id, 'spam');
+    await appendActionLog(guildId, author.id, `Spam detected — warns: spam=${warns.spam}`);
+
+    if (settings.warnBeforeBan > 0 && warns.spam < settings.warnBeforeBan) {
+      await muteUser(guild, author.id, 10, 'Anti-Spam').catch(() => {});
+      try { await message.reply(`⚠️ ${author} ส่งข้อความเร็วเกินไป! เตือนครั้งที่ ${warns.spam}/${settings.warnBeforeBan}`); } catch (_) {}
+      if (settings.logNotify?.spam) {
+        await sendLog(guild, settings, makeEmbed(0xed4245, '🚫 Spam Detected',
+          `<@${author.id}> ส่งข้อความ spam — muted 10 นาที`,
+          [{ name: 'Warn', value: `${warns.spam}/${settings.warnBeforeBan}` }]));
+      }
+    } else {
+      await member.ban({ reason: 'Auto-ban: Spam' }).catch(() => {});
+      if (settings.logNotify?.spam) {
+        await sendLog(guild, settings, makeEmbed(0xed4245, '🚫 Spam → Auto Ban',
+          `<@${author.id}> ถูก ban อัตโนมัติจาก spam`));
+      }
+    }
+  }
+}
+
+// ─── Anti-Invite ──────────────────────────────────────────────────────────────
+const INVITE_REGEX = /discord(?:\.gg|app\.com\/invite|\.com\/invite)\/([a-zA-Z0-9\-]+)/gi;
+
+async function checkInvite(message, settings) {
+  if (!settings.antiInvite) return;
+  const matches = [...message.content.matchAll(INVITE_REGEX)];
+  if (!matches.length) return;
+
+  const allowed = (settings.allowedInvites || []).map(s => s.toLowerCase());
+  const blocked = matches.filter(m => !allowed.includes(m[1].toLowerCase()));
+  if (!blocked.length) return;
+
+  await message.delete().catch(() => {});
+  const { guildId, author, guild } = message;
+  const warns = await addWarn(guildId, author.id, 'invite');
+  await appendActionLog(guildId, author.id, `Invite link detected — warns: invite=${warns.invite}`);
+
+  if (settings.warnBeforeBan > 0 && warns.invite < settings.warnBeforeBan) {
+    try { await message.channel.send(`⚠️ ${author} ห้ามส่งลิงก์ invite! เตือนครั้งที่ ${warns.invite}/${settings.warnBeforeBan}`); } catch (_) {}
+    if (settings.logNotify?.invite) {
+      await sendLog(guild, settings, makeEmbed(0xfaa61a, '🔗 Invite Link Detected',
+        `<@${author.id}> ส่งลิงก์ invite — ลบแล้ว`,
+        [{ name: 'Warn', value: `${warns.invite}/${settings.warnBeforeBan}` }]));
+    }
   } else {
-    icon.style.display = 'none';
-    fallback.textContent = guild.name[0].toUpperCase();
-    fallback.style.display = '';
-  }
-  document.getElementById('top-guild-name').textContent = guild.name;
-  // go to settings
-  navTo('settings');
-}
-
-function renderGuildDropdown() {
-  const dd = document.getElementById('guild-dropdown');
-  dd.innerHTML = guilds.map(g => `
-    <div class="guild-item" onclick="selectGuild(${JSON.stringify(g).replace(/"/g,'&quot;')});event.stopPropagation()">
-      ${g.icon
-        ? `<img src="${g.icon}" alt="">`
-        : `<div class="guild-fallback">${g.name[0].toUpperCase()}</div>`}
-      <div>
-        <div class="gname">${escHtml(g.name)}</div>
-        <div class="gmem">${g.memberCount.toLocaleString()} สมาชิก</div>
-      </div>
-    </div>`).join('');
-}
-
-function renderGuildGrid() {
-  const grid = document.getElementById('guild-grid');
-  if (!guilds.length) { grid.innerHTML = '<p style="color:var(--muted2)">ไม่พบเซิร์ฟเวอร์</p>'; return; }
-  grid.innerHTML = guilds.map(g => `
-    <div class="guild-card" onclick="selectGuild(${JSON.stringify(g).replace(/"/g,'&quot;')})">
-      ${g.icon
-        ? `<img src="${g.icon}" alt="${escHtml(g.name)}">`
-        : `<div class="guild-fallback" style="width:56px;height:56px;font-size:22px">${g.name[0].toUpperCase()}</div>`}
-      <div class="gc-name">${escHtml(g.name)}</div>
-      <div class="gc-mem">${g.memberCount.toLocaleString()} สมาชิก</div>
-    </div>`).join('');
-}
-
-// ── Settings ────────────────────────────────────────────────
-async function loadSettings(gid) {
-  const el = document.getElementById('settings-content');
-  el.innerHTML = '<div class="spinner"></div>';
-  document.getElementById('settings-sub').textContent = 'กำลังโหลด...';
-  try {
-    const data = await apiFetch(`/api/guild/${gid}`);
-    currentSettings = JSON.parse(JSON.stringify(data.settings));
-    originalSettings = JSON.parse(JSON.stringify(data.settings));
-    document.getElementById('settings-sub').textContent =
-      `${data.name} — ${data.memberCount.toLocaleString()} สมาชิก`;
-    el.innerHTML = buildSettingsHTML(data);
-    bindSettingsEvents(data);
-    dirty = false;
-    document.getElementById('save-bar').classList.remove('visible');
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
-  }
-}
-
-function buildSettingsHTML(data) {
-  const s = data.settings;
-  const channels = data.channels;
-  const chOpts = channels.map(c =>
-    `<option value="${c.id}">${escHtml('#' + c.name)}</option>`).join('');
-
-  const chCheckboxes = (ids, key) => channels.map(c =>
-    `<div class="ch-item">
-      <input type="checkbox" id="ch_${key}_${c.id}" value="${c.id}" ${ids.includes(c.id)?'checked':''}
-        onchange="onSettingChange('${key}', getCheckedValues('ch_${key}'))">
-      <label for="ch_${key}_${c.id}">#${escHtml(c.name)}</label>
-    </div>`).join('');
-
-  return `
-  <div class="settings-grid">
-
-    <!-- การป้องกัน (toggles) -->
-    <div class="settings-card">
-      <div class="settings-card-title">🛡️ เปิด/ปิดการป้องกัน</div>
-      ${[
-        ['antiSpam',      '🚫', 'Anti-Spam'],
-        ['antiInvite',    '🔗', 'Anti-Invite Link'],
-        ['antiToken',     '🪝', 'Anti-Token Grabber'],
-        ['antiGhostPing', '👻', 'Ghost Ping Detection'],
-        ['raidProtect',   '🚨', 'Raid Protection'],
-        ['nukeProtect',   '💣', 'Nuke Protection'],
-      ].map(([key, icon, label]) => `
-        <div class="toggle-row">
-          <span class="toggle-label"><span class="ticon">${icon}</span>${label}</span>
-          <label class="toggle">
-            <input type="checkbox" id="tog_${key}" ${s[key]?'checked':''}
-              onchange="onSettingChange('${key}', this.checked)">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>`).join('')}
-    </div>
-
-    <!-- Log Channel -->
-    <div class="settings-card">
-      <div class="settings-card-title">📋 ห้อง Log</div>
-      <div class="field">
-        <label>Log Channel</label>
-        <select id="sel_logChannelId" onchange="onSettingChange('logChannelId', this.value)">
-          <option value="">— ไม่ใช้ —</option>
-          ${chOpts}
-        </select>
-      </div>
-      <script>
-        setTimeout(()=>{
-          const el = document.getElementById('sel_logChannelId');
-          if(el) el.value = '${s.logChannelId}';
-        },0);
-      <\/script>
-    </div>
-
-    <!-- Anti-Spam settings -->
-    <div class="settings-card">
-      <div class="settings-card-title">🚫 ตั้งค่า Anti-Spam</div>
-      <div class="field">
-        <label>ข้อความสูงสุดต่อ X วิ (Limit)</label>
-        <input type="number" id="inp_spamMsgLimit" min="1" max="20" value="${s.spamMsgLimit}"
-          oninput="onSettingChange('spamMsgLimit', +this.value)">
-      </div>
-      <div class="field">
-        <label>ช่วงเวลา (วินาที)</label>
-        <input type="number" id="inp_spamWindowSec" min="1" max="60" value="${s.spamWindowSec}"
-          oninput="onSettingChange('spamWindowSec', +this.value)">
-      </div>
-      <div class="field">
-        <label>เตือนกี่ครั้งก่อน Ban (0 = ban ทันที)</label>
-        <input type="number" id="inp_warnBeforeBan" min="0" max="10" value="${s.warnBeforeBan}"
-          oninput="onSettingChange('warnBeforeBan', +this.value)">
-      </div>
-      <div class="field">
-        <label>ห้องที่ตรวจ Spam (ไม่เลือก = ทุกห้อง)</label>
-        <div class="ch-select">${chCheckboxes(s.spamChannelIds||[], 'spamChannelIds')}</div>
-      </div>
-    </div>
-
-    <!-- Raid / Nuke -->
-    <div class="settings-card">
-      <div class="settings-card-title">🚨 Raid & Nuke</div>
-      <div class="field">
-        <label>Raid: คนเข้ากี่คนใน X วิ ถึงแจ้งเตือน</label>
-        <input type="number" id="inp_raidThresh" min="2" max="50" value="${s.raidThresh}"
-          oninput="onSettingChange('raidThresh', +this.value)">
-      </div>
-      <div class="field">
-        <label>Raid: ช่วงเวลา (วินาที)</label>
-        <input type="number" id="inp_raidWindow" min="1" max="120" value="${s.raidWindow}"
-          oninput="onSettingChange('raidWindow', +this.value)">
-      </div>
-      <div class="field">
-        <label>Nuke: ลบห้องกี่ห้องใน 10 วิ ถึงแจ้งเตือน</label>
-        <input type="number" id="inp_nukeThresh" min="1" max="20" value="${s.nukeThresh}"
-          oninput="onSettingChange('nukeThresh', +this.value)">
-      </div>
-    </div>
-
-    <!-- Allowed Invites -->
-    <div class="settings-card">
-      <div class="settings-card-title">🔗 Invite ที่อนุญาต</div>
-      <div class="field">
-        <label>เพิ่ม invite code (กด Enter)</label>
-        <div class="tags-wrap" id="tags-allowedInvites">
-          ${(s.allowedInvites||[]).map(t =>
-            `<span class="tag">${escHtml(t)}<button onclick="removeTag('allowedInvites','${escHtml(t)}')">×</button></span>`
-          ).join('')}
-          <input class="tags-input" placeholder="xxxxxxx" id="tag-input-allowedInvites"
-            onkeydown="tagKeydown(event,'allowedInvites')">
-        </div>
-      </div>
-    </div>
-
-    <!-- Log Notify -->
-    <div class="settings-card" style="grid-column: 1 / -1">
-      <div class="settings-card-title">🔔 การแจ้งเตือนใน Discord (Log Channel)</div>
-      <p style="font-size:12px;color:var(--muted2);margin-bottom:14px">เลือกว่าบอทจะส่ง embed ไปยัง Log Channel ในดิสสำหรับเหตุการณ์ไหนบ้าง — Panel ยังบันทึกทุกอย่างเหมือนเดิม</p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0">
-        ${[
-          ['spam',       '🚫', 'Spam — Auto Warn / Ban',              true],
-          ['invite',     '🔗', 'Invite Link — Auto Warn / Ban',       true],
-          ['token',      '🪝', 'Token Grabber — Auto Ban',            true],
-          ['ghostPing',  '👻', 'Ghost Ping',                          true],
-          ['watchlist',  '👁', 'Watchlist Alert (ส่ง / ลบ / เข้าเซิร์ฟ)', true],
-          ['raid',       '🚨', 'Raid Detected',                       true],
-          ['nuke',       '💣', 'Nuke Attempt',                        true],
-          ['newAccount', '🆕', 'บัญชีใหม่น่าสงสัย',                  true],
-          ['memberJoin', '🚪', 'User เข้าเซิร์ฟ (ทุกคน)',            false],
-          ['mute',       '🔇', 'Mute / Unmute จาก Panel',            false],
-          ['ban',        '🔨', 'Ban จาก Panel',                       true],
-        ].map(([key, icon, label, defVal]) => {
-          const checked = s.logNotify?.[key] !== undefined ? s.logNotify[key] : defVal;
-          return `
-          <div class="toggle-row">
-            <span class="toggle-label"><span class="ticon">${icon}</span>${label}</span>
-            <label class="toggle">
-              <input type="checkbox" id="lntog_${key}" ${checked ? 'checked' : ''}
-                onchange="onLogNotifyChange('${key}', this.checked)">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>
-
-  </div>`;
-}
-
-function bindSettingsEvents(data) {
-  // set select values after render
-  setTimeout(() => {
-    const logSel = document.getElementById('sel_logChannelId');
-    if (logSel) logSel.value = currentSettings.logChannelId || '';
-  }, 50);
-}
-
-function getCheckedValues(prefix) {
-  return [...document.querySelectorAll(`[id^="${prefix}_"]:checked`)].map(el => el.value);
-}
-
-function onSettingChange(key, value) {
-  if (!currentSettings) return;
-  currentSettings[key] = value;
-  dirty = true;
-  document.getElementById('save-bar').classList.add('visible');
-}
-
-function onLogNotifyChange(key, value) {
-  if (!currentSettings) return;
-  if (!currentSettings.logNotify) currentSettings.logNotify = {};
-  currentSettings.logNotify[key] = value;
-  dirty = true;
-  document.getElementById('save-bar').classList.add('visible');
-}
-
-// tags
-function tagKeydown(e, key) {
-  if (e.key !== 'Enter' && e.key !== ',') return;
-  e.preventDefault();
-  const val = e.target.value.trim().replace(/discord\.gg\//i,'');
-  if (!val) return;
-  const arr = currentSettings[key] || [];
-  if (arr.includes(val)) return;
-  arr.push(val);
-  currentSettings[key] = arr;
-  e.target.value = '';
-  const wrap = document.getElementById('tags-' + key);
-  const newTag = document.createElement('span');
-  newTag.className = 'tag';
-  newTag.innerHTML = `${escHtml(val)}<button onclick="removeTag('${key}','${escHtml(val)}')">×</button>`;
-  wrap.insertBefore(newTag, e.target);
-  onSettingChange(key, arr);
-}
-function removeTag(key, val) {
-  currentSettings[key] = (currentSettings[key]||[]).filter(t => t !== val);
-  document.getElementById('tags-'+key)?.querySelectorAll('.tag').forEach(el => {
-    if (el.textContent.trim().startsWith(val)) el.remove();
-  });
-  onSettingChange(key, currentSettings[key]);
-}
-
-async function saveSettings() {
-  if (!currentGuild || !currentSettings) return;
-  try {
-    await apiFetch(`/api/guild/${currentGuild.id}/settings`, {
-      method: 'POST',
-      body: JSON.stringify(currentSettings),
-    });
-    originalSettings = JSON.parse(JSON.stringify(currentSettings));
-    dirty = false;
-    document.getElementById('save-bar').classList.remove('visible');
-    showToast('✅ บันทึกสำเร็จ', 'success');
-  } catch(e) {
-    showToast('❌ บันทึกไม่สำเร็จ: ' + e.message, 'error');
-  }
-}
-function discardSettings() {
-  currentSettings = JSON.parse(JSON.stringify(originalSettings));
-  dirty = false;
-  document.getElementById('save-bar').classList.remove('visible');
-  loadSettings(currentGuild.id);
-}
-
-// ── Profile Popup ─────────────────────────────────────────────
-// profileCache เก็บโดย uid, ค่าเป็น profile object + warnSpam/warnInvite
-const profilePopupCache = {};
-
-function closeProfilePopup() {
-  document.getElementById('profile-overlay').style.display = 'none';
-  document.getElementById('profile-popup').style.display   = 'none';
-}
-
-async function showProfilePopup(uid, anchorEl, gid) {
-  // โหลดจาก cache หรือ fetch
-  let p = profilePopupCache[uid] || logProfileCache[uid] || null;
-  if (!p) {
-    try {
-      p = await apiFetch(`/api/user/${uid}/profile`);
-    } catch(_) {
-      p = { id: uid, username: uid, displayName: uid, avatar: null };
+    const member = await guild.members.fetch(author.id).catch(() => null);
+    if (member) await member.ban({ reason: 'Auto-ban: Invite spam' }).catch(() => {});
+    if (settings.logNotify?.invite) {
+      await sendLog(guild, settings, makeEmbed(0xed4245, '🔗 Invite → Auto Ban',
+        `<@${author.id}> ถูก ban จากการส่ง invite link ซ้ำ`));
     }
   }
-  // ดึง warn ถ้ายังไม่มี
-  if (p.warnSpam === undefined && gid) {
-    try {
-      const w = await apiFetch(`/api/guild/${gid}/warns`);
-      const entry = (w.warns || []).find(x => x.uid === uid);
-      p = { ...p, warnSpam: entry?.spam || 0, warnInvite: entry?.invite || 0 };
-    } catch(_) { p = { ...p, warnSpam: 0, warnInvite: 0 }; }
-  }
-  profilePopupCache[uid] = p;
-  logProfileCache[uid]   = p;
-
-  const displayName = p.displayName || p.username || uid;
-  const username    = p.username !== displayName ? p.username : null;
-  const createdDate = p.createdAt
-    ? new Date(p.createdAt).toLocaleDateString('th-TH', { year:'numeric', month:'long', day:'numeric' })
-    : '—';
-  const accentHex = p.accentColor
-    ? '#' + p.accentColor.toString(16).padStart(6, '0')
-    : '#5865f2';
-
-  const bannerHtml = p.banner
-    ? `<img class="profile-banner" src="${escHtml(p.banner)}" onerror="this.parentNode.innerHTML='<div class=profile-banner-color style=background:${accentHex}></div>'">`
-    : `<div class="profile-banner-color" style="background:${accentHex}"></div>`;
-
-  const avatarHtml = p.avatar
-    ? `<img class="profile-avatar" src="${escHtml(p.avatar)}" onerror="this.outerHTML='<div class=profile-avatar-fallback>${escHtml((displayName[0]||'?').toUpperCase())}</div>'">`
-    : `<div class="profile-avatar-fallback">${escHtml((displayName[0]||'?').toUpperCase())}</div>`;
-
-  const warnSpam   = p.warnSpam   || 0;
-  const warnInvite = p.warnInvite || 0;
-  const warnHtml = (warnSpam === 0 && warnInvite === 0)
-    ? `<span class="profile-warn-pill clean">✅ ไม่มี Warn</span>`
-    : [
-        warnSpam   > 0 ? `<span class="profile-warn-pill spam">🚫 Spam ×${warnSpam}</span>` : '',
-        warnInvite > 0 ? `<span class="profile-warn-pill invite">🔗 Invite ×${warnInvite}</span>` : '',
-      ].join('');
-
-  const botBadge = p.bot ? `<div class="profile-badge-bot">BOT</div>` : '';
-  const gidAttr  = gid ? `data-gid="${escHtml(gid)}"` : '';
-
-  const popup = document.getElementById('profile-popup');
-  popup.innerHTML = `
-    ${bannerHtml}
-    <div style="position:relative">
-      <div class="profile-avatar-wrap">
-        <div style="position:relative;display:inline-block">
-          ${avatarHtml}
-          ${botBadge}
-        </div>
-      </div>
-    </div>
-    <div class="profile-body">
-      <div class="profile-display-name">${escHtml(displayName)}</div>
-      ${username ? `<div class="profile-username">@${escHtml(username)}</div>` : ''}
-      <hr class="profile-divider">
-      <div class="profile-section-title">ข้อมูล Discord</div>
-      <div class="profile-info-row">🆔 <strong>${escHtml(uid)}</strong></div>
-      <div class="profile-info-row">📅 สร้างบัญชีเมื่อ <strong>${createdDate}</strong></div>
-      <hr class="profile-divider">
-      <div class="profile-section-title">สถานะ Warn</div>
-      <div class="profile-warn-pills">${warnHtml}</div>
-
-      <hr class="profile-divider">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div class="profile-section-title" style="margin-bottom:0">💬 ข้อความล่าสุด</div>
-        <span id="popup-msg-count" style="font-size:11px;color:var(--muted)">กำลังโหลด...</span>
-      </div>
-      <div class="popup-msg-feed" id="popup-msg-feed">
-        <div style="text-align:center;padding:16px 0"><div class="spinner" style="margin:0 auto"></div></div>
-      </div>
-
-      <div class="profile-actions" ${gidAttr} data-uid="${escHtml(uid)}" style="margin-top:12px">
-        <button class="btn btn-sm" style="background:#f97316;color:#fff" onclick="muteFromPopup('${escHtml(uid)}')">🔇 Mute</button>
-        <button class="btn btn-ghost btn-sm" onclick="unmuteFromPopup('${escHtml(uid)}')">🔊 Unmute</button>
-        <button class="btn btn-danger btn-sm" onclick="banFromPopup('${escHtml(uid)}','${escHtml(displayName)}')">🔨 Ban</button>
-      </div>
-    </div>`;
-
-  // คำนวณตำแหน่งไม่ให้ออกนอกจอ
-  popup.style.display = 'block';
-  const rect    = anchorEl.getBoundingClientRect();
-  const popW    = 380, popH = popup.offsetHeight || 500;
-  let left = rect.right + 8;
-  let top  = rect.top;
-  if (left + popW > window.innerWidth  - 8) left = rect.left - popW - 8;
-  if (top  + popH > window.innerHeight - 8) top  = window.innerHeight - popH - 8;
-  if (left < 8) left = 8;
-  if (top  < 8) top  = 8;
-  popup.style.left = left + 'px';
-  popup.style.top  = top  + 'px';
-  document.getElementById('profile-overlay').style.display = 'block';
-
-  // โหลดข้อความใน background
-  if (gid) loadPopupMessages(uid, gid);
 }
 
-async function loadPopupMessages(uid, gid) {
-  const feed    = document.getElementById('popup-msg-feed');
-  const counter = document.getElementById('popup-msg-count');
-  if (!feed) return;
-  try {
-    const data = await apiFetch(`/api/guild/${gid}/messages?uid=${encodeURIComponent(uid)}`);
-    const msgs = (data.messages || []).slice(0, 30); // แสดงล่าสุด 30
-    if (counter) counter.textContent = `${msgs.length} ข้อความ`;
-    if (!msgs.length) {
-      feed.innerHTML = `<div style="text-align:center;padding:12px;color:var(--muted);font-size:12px">ไม่มีข้อความที่บันทึกไว้</div>`;
-      return;
-    }
-    feed.innerHTML = msgs.map(m => {
-      const timeStr = new Date(m.ts).toLocaleString('th-TH', {
-        month:'short', day:'numeric',
-        hour:'2-digit', minute:'2-digit'
-      });
-      const delBadge = m.deleted ? `<span class="popup-msg-del">🗑 ลบแล้ว</span>` : '';
-      const content  = m.content?.trim() || '*(ไม่มีข้อความ)*';
-      return `
-        <div class="popup-msg-item${m.deleted ? ' deleted-item' : ''}">
-          <div class="popup-msg-meta">
-            <span class="popup-msg-ch">#${escHtml(m.channel || '?')}</span>
-            <span class="popup-msg-time">${escHtml(timeStr)}</span>
-            ${delBadge}
-          </div>
-          <div class="popup-msg-text${m.deleted ? ' is-deleted' : ''}">${escHtml(content)}</div>
-        </div>`;
-    }).join('');
-  } catch(e) {
-    if (feed) feed.innerHTML = `<div style="padding:10px;color:var(--red);font-size:12px">โหลดไม่ได้</div>`;
-    if (counter) counter.textContent = '';
+// ─── Anti-Token ───────────────────────────────────────────────────────────────
+const TOKEN_REGEX = /[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}/;
+
+async function checkToken(message, settings) {
+  if (!settings.antiToken) return;
+  if (!TOKEN_REGEX.test(message.content)) return;
+  await message.delete().catch(() => {});
+  const { guild, author } = message;
+  const member = await guild.members.fetch(author.id).catch(() => null);
+  if (member) await member.ban({ reason: 'Token grabber detected' }).catch(() => {});
+  await appendActionLog(message.guildId, author.id, 'Token grabber message detected — auto banned');
+  if (settings.logNotify?.token) {
+    await sendLog(guild, settings, makeEmbed(0xed4245, '🪝 Token Grabber Detected',
+      `<@${author.id}> ส่งข้อความที่มี token — banned ทันที`));
   }
 }
 
-async function muteFromPopup(uid) {
-  if (!currentGuild) return;
-  const min = prompt('Mute กี่นาที?', '10');
-  if (!min || isNaN(min)) return;
-  try {
-    await apiFetch(`/api/guild/${currentGuild.id}/mute`, {
-      method: 'POST',
-      body: JSON.stringify({ userId: uid, minutes: +min, reason: 'Muted via Panel Profile' }),
-    });
-    showToast(`🔇 Mute ${uid} ${min} นาที สำเร็จ`, 'success');
-    closeProfilePopup();
-  } catch(e) { showToast('❌ Mute ไม่ได้: ' + e.message, 'error'); }
-}
-async function unmuteFromPopup(uid) {
-  if (!currentGuild) return;
-  try {
-    await apiFetch(`/api/guild/${currentGuild.id}/unmute`, {
-      method: 'POST', body: JSON.stringify({ userId: uid }),
-    });
-    showToast(`🔊 Unmute ${uid} สำเร็จ`, 'success');
-    closeProfilePopup();
-  } catch(e) { showToast('❌ Unmute ไม่ได้: ' + e.message, 'error'); }
-}
-async function banFromPopup(uid, name) {
-  if (!currentGuild) return;
-  if (!confirm(`Ban "${name}" (${uid}) ออกจากเซิร์ฟ?`)) return;
-  try {
-    await apiFetch(`/api/guild/${currentGuild.id}/ban`, {
-      method: 'POST', body: JSON.stringify({ userId: uid, reason: 'Banned via Panel Profile' }),
-    });
-    showToast(`🔨 Ban ${name} สำเร็จ`, 'success');
-    closeProfilePopup();
-  } catch(e) { showToast('❌ Ban ไม่ได้: ' + e.message, 'error'); }
+// ─── Ghost Ping ───────────────────────────────────────────────────────────────
+const ghostPingMap = {}; // [guildId][msgId] = { mentions, author }
+
+async function checkGhostPing(message) {
+  if (!message.mentions.users.size) return;
+  if (!ghostPingMap[message.guildId]) ghostPingMap[message.guildId] = {};
+  ghostPingMap[message.guildId][message.id] = {
+    mentions: [...message.mentions.users.keys()],
+    author:   message.author.id,
+    channel:  message.channelId,
+  };
 }
 
-// ── Watchlist ───────────────────────────────────────────────
-async function loadWatchlist(gid) {
-  const el = document.getElementById('watchlist-content');
-  el.innerHTML = '<div class="spinner"></div>';
-  try {
-    // โหลด guild data ก่อน (เร็ว) แล้วแสดงทันที
-    const guildData = await apiFetch(`/api/guild/${gid}`);
-    const list = guildData.watchlist || [];
-    document.getElementById('watchlist-sub').textContent =
-      `${guildData.name} — ${list.length} คน`;
+async function handleDeletedGhostPing(message, settings) {
+  if (!settings.antiGhostPing) return;
+  const data = ghostPingMap[message.guildId]?.[message.id];
+  if (!data || !data.mentions.length) return;
+  delete ghostPingMap[message.guildId][message.id];
 
-    // แสดง list ก่อนโดยใช้ cache ที่มีอยู่แล้ว
-    const renderList = (profileMap) => {
-      el.innerHTML = `
-        <div style="display:flex;gap:8px;margin-bottom:16px;max-width:400px">
-          <input type="text" id="watch-input" placeholder="User ID..." style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:8px 10px;outline:none">
-          <button class="btn btn-primary btn-sm" onclick="addToWatchlist()">+ เพิ่ม</button>
-        </div>
-        <div class="watch-list" id="watch-list">
-          ${list.length
-            ? list.map(uid => watchItem(uid, gid, profileMap[uid])).join('')
-            : '<p style="color:var(--muted2)">ไม่มี user ใน watchlist</p>'}
-        </div>`;
-    };
-
-    // render ด้วย cache ที่มีก่อน (เร็ว)
-    const existingCache = {};
-    list.forEach(uid => { if (logProfileCache[uid]) existingCache[uid] = logProfileCache[uid]; });
-    renderList(existingCache);
-
-    // โหลด profiles ใน background แบบ batch ทีละ 3
-    const needFetch = list.filter(uid => !logProfileCache[uid]);
-    const profileMap = { ...existingCache };
-    for (let i = 0; i < needFetch.length; i += 3) {
-      const batch = needFetch.slice(i, i + 3);
-      await Promise.allSettled(batch.map(async uid => {
-        try {
-          const p = await apiFetch(`/api/user/${uid}/profile`);
-          logProfileCache[uid] = p;
-          profileMap[uid] = p;
-        } catch(_) {
-          const fallback = { id: uid, username: uid, displayName: uid, avatar: null };
-          logProfileCache[uid] = fallback;
-          profileMap[uid] = fallback;
-        }
-      }));
-      renderList(profileMap);
-    }
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
-  }
-}
-function watchItem(uid, gid, profile) {
-  const name   = profile?.displayName || profile?.username || uid;
-  const avatar = profile?.avatar;
-  const avatarHtml = avatar
-    ? `<img src="${escHtml(avatar)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0;cursor:pointer" onerror="this.style.display='none'" onclick="event.stopPropagation();showProfilePopup('${escHtml(uid)}',this,'${escHtml(gid)}')">`
-    : `<div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0;cursor:pointer" onclick="event.stopPropagation();showProfilePopup('${escHtml(uid)}',this,'${escHtml(gid)}')">${escHtml((name[0]||'?').toUpperCase())}</div>`;
-  return `<div class="watch-item" id="wi_${uid}">
-    <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">
-      ${avatarHtml}
-      <div style="min-width:0;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${escHtml(gid)}')">
-        <div style="font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(name)}</div>
-        <div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${escHtml(uid)}</div>
-      </div>
-    </div>
-    <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-      <select id="mute-min-${uid}" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:12px;padding:4px 8px;outline:none">
-        <option value="5">5 นาที</option>
-        <option value="10" selected>10 นาที</option>
-        <option value="30">30 นาที</option>
-        <option value="60">60 นาที</option>
-      </select>
-      <button class="btn btn-sm" style="background:#f97316;color:#fff" onclick="muteWatchUser('${uid}','${gid}')">🔇 Mute</button>
-      <button class="btn btn-ghost btn-sm" onclick="unmuteWatchUser('${uid}','${gid}')">🔊</button>
-      <button class="btn btn-danger btn-sm" onclick="removeFromWatchlist('${uid}','${gid}')">ลบ</button>
-    </div>
-  </div>`;
-}
-async function addToWatchlist() {
-  const uid = document.getElementById('watch-input').value.trim();
-  if (!uid || !currentGuild) return;
-  await apiFetch(`/api/guild/${currentGuild.id}/watchlist`, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'add', userId: uid }),
-  });
-  document.getElementById('watch-input').value = '';
-  // ดึงโปรไฟล์ Discord จริง
-  let profile = null;
-  try {
-    profile = await apiFetch(`/api/user/${uid}/profile`);
-  } catch(_) {}
-  const list = document.getElementById('watch-list');
-  // ลบ placeholder ถ้ามี
-  const empty = list?.querySelector('p');
-  if (empty) empty.remove();
-  if (list) {
-    const el = document.createElement('div');
-    el.innerHTML = watchItem(uid, currentGuild.id, profile);
-    list.prepend(el.firstChild);
-  }
-  const name = profile?.displayName || profile?.username || uid;
-  showToast(`✅ เพิ่ม ${name} แล้ว`, 'success');
-}
-async function removeFromWatchlist(uid, gid) {
-  await apiFetch(`/api/guild/${gid}/watchlist`, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'remove', userId: uid }),
-  });
-  document.getElementById('wi_'+uid)?.remove();
-  showToast(`🗑 ลบ ${uid} แล้ว`, 'success');
-}
-
-async function muteWatchUser(uid, gid) {
-  const minutes = parseInt(document.getElementById(`mute-min-${uid}`)?.value || '10');
-  try {
-    await apiFetch(`/api/guild/${gid}/mute`, {
-      method: 'POST',
-      body: JSON.stringify({ userId: uid, minutes, reason: 'Muted via Panel — Watchlist' }),
-    });
-    showToast(`🔇 Mute ${uid} ${minutes} นาที สำเร็จ`, 'success');
-  } catch(e) {
-    showToast('❌ Mute ไม่ได้: ' + e.message, 'error');
+  const pings = data.mentions.map(id => `<@${id}>`).join(', ');
+  await appendActionLog(message.guildId, data.author, `Ghost ping detected — pinged: ${pings}`);
+  if (settings.logNotify?.ghostPing) {
+    const ch = await message.guild.channels.fetch(data.channel).catch(() => null);
+    await sendLog(message.guild, settings, makeEmbed(0xfaa61a, '👻 Ghost Ping Detected',
+      `<@${data.author}> ลบข้อความที่ ping ${pings}`,
+      [{ name: 'ห้อง', value: ch ? `<#${ch.id}>` : data.channel }]));
   }
 }
 
-async function unmuteWatchUser(uid, gid) {
-  try {
-    await apiFetch(`/api/guild/${gid}/unmute`, {
-      method: 'POST',
-      body: JSON.stringify({ userId: uid }),
-    });
-    showToast(`🔊 Unmute ${uid} สำเร็จ`, 'success');
-  } catch(e) {
-    showToast('❌ Unmute ไม่ได้: ' + e.message, 'error');
-  }
-}
+// ─── Raid Protection ──────────────────────────────────────────────────────────
+async function checkRaid(member, settings) {
+  if (!settings.raidProtect) return;
+  const { guild } = member;
+  if (!raidMap[guild.id]) raidMap[guild.id] = [];
+  const now    = Date.now();
+  const window = settings.raidWindow * 1000;
+  raidMap[guild.id] = raidMap[guild.id].filter(t => now - t < window);
+  raidMap[guild.id].push(now);
 
-// ── New Accounts ─────────────────────────────────────────────
-async function loadNewAccs(gid) {
-  const el = document.getElementById('newaccs-content');
-  el.innerHTML = '<div class="spinner"></div>';
-  document.getElementById('newaccs-sub').textContent = 'กำลังโหลด...';
-  try {
-    const data = await apiFetch(`/api/guild/${gid}/newaccs`);
-    const list = data.accounts || [];
-    document.getElementById('newaccs-sub').textContent =
-      list.length ? `พบ ${list.length} บัญชีน่าสงสัย` : 'ไม่มีบัญชีน่าสงสัยในขณะนี้';
-    if (!list.length) {
-      el.innerHTML = '<p style="color:var(--muted2);padding:20px 0">✅ ไม่มีบัญชีใหม่ที่น่าสงสัย</p>';
-      return;
-    }
-    el.innerHTML = `<div class="newacc-grid">${list.map(acc => newAccCard(acc)).join('')}</div>`;
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
-  }
-}
-
-function newAccCard(acc) {
-  const joinedDate = new Date(acc.joinedAt).toLocaleString('th-TH');
-  const ageColor   = acc.ageDays < 7 ? 'newacc-age-warn' : 'newacc-value';
-  return `
-    <div class="newacc-card${acc.ageDays < 7 ? ' flagged' : ''}" id="nacard_${acc.id}">
-      <div class="newacc-header">
-        ${acc.avatar
-          ? `<img class="newacc-avatar" src="${escHtml(acc.avatar)}" onerror="this.style.display='none'">`
-          : `<div class="newacc-avatar-fallback">${escHtml((acc.tag||'?')[0].toUpperCase())}</div>`}
-        <div>
-          <div class="newacc-tag">${escHtml(acc.tag || 'Unknown')}</div>
-          <div class="newacc-id">${escHtml(acc.id)}</div>
-        </div>
-      </div>
-      <div class="newacc-info">
-        <div class="newacc-row">
-          <span class="newacc-label">อายุบัญชี</span>
-          <span class="${ageColor}">${acc.ageDays} วัน ${acc.ageDays < 7 ? '🚨' : '⚠️'}</span>
-        </div>
-        <div class="newacc-row">
-          <span class="newacc-label">เข้าเซิร์ฟเมื่อ</span>
-          <span class="newacc-value">${escHtml(joinedDate)}</span>
-        </div>
-      </div>
-      <div class="newacc-actions">
-        <button class="btn btn-danger btn-sm" style="flex:1"
-          onclick="banNewAcc('${acc.id}', '${escHtml(acc.tag||acc.id)}')">
-          🔨 Ban ID
-        </button>
-        <button class="btn btn-ghost btn-sm"
-          onclick="dismissNewAcc('${acc.id}')">
-          ✓ ปลอดภัย
-        </button>
-      </div>
-    </div>`;
-}
-
-async function banNewAcc(uid, tag) {
-  if (!currentGuild) return;
-  if (!confirm(`Ban "${tag}" (ID: ${uid}) ออกจากเซิร์ฟ?\n\nเปลี่ยนชื่อก็โดน ban เพราะใช้ ID`)) return;
-  try {
-    await apiFetch(`/api/guild/${currentGuild.id}/ban`, {
-      method: 'POST',
-      body: JSON.stringify({ userId: uid, reason: 'Banned via Panel — New Account Suspicious' }),
-    });
-    document.getElementById('nacard_' + uid)?.remove();
-    showToast(`🔨 Ban ${tag} สำเร็จ`, 'success');
-  } catch(e) {
-    showToast('❌ Ban ไม่ได้: ' + e.message, 'error');
-  }
-}
-
-async function dismissNewAcc(uid) {
-  if (!currentGuild) return;
-  await apiFetch(`/api/guild/${currentGuild.id}/dismiss-newacc`, {
-    method: 'POST',
-    body: JSON.stringify({ userId: uid }),
-  });
-  document.getElementById('nacard_' + uid)?.remove();
-  showToast('✅ ปิด alert แล้ว', 'success');
-}
-
-// ── Warns ────────────────────────────────────────────────────
-async function loadWarns(gid) {
-  const el = document.getElementById('warns-content');
-  el.innerHTML = '<div class="spinner"></div>';
-  document.getElementById('warns-sub').textContent = 'กำลังโหลด...';
-  try {
-    const data = await apiFetch(`/api/guild/${gid}/warns`);
-    const list = data.warns || [];
-    document.getElementById('warns-sub').textContent = `พบ ${list.length} user ที่มี warn`;
-    if (!list.length) {
-      el.innerHTML = '<p style="color:var(--muted2);padding:20px 0">ไม่มี user ที่มี warn ในขณะนี้ ✅</p>';
-      return;
-    }
-    el.innerHTML = `
-      <div class="log-card" style="max-width:640px">
-        <div class="warn-row" style="background:var(--surface2)">
-          <span class="warn-uid2" style="font-weight:600;color:var(--text)">User ID</span>
-          <span class="warn-badge"><span style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Spam</span></span>
-          <span class="warn-badge"><span style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Invite</span></span>
-          <span style="width:80px"></span>
-        </div>
-        ${list.map(w => `
-          <div class="warn-row">
-            <span class="warn-uid2">${escHtml(w.uid)}</span>
-            <span class="warn-badge">
-              <span class="warn-num" style="color:${w.spam>0?'var(--red)':'var(--muted)'}">${w.spam}</span>
-              <span class="warn-label">spam</span>
-            </span>
-            <span class="warn-badge">
-              <span class="warn-num" style="color:${w.invite>0?'var(--yellow)':'var(--muted)'}">${w.invite}</span>
-              <span class="warn-label">invite</span>
-            </span>
-            <button class="btn btn-ghost btn-sm" onclick="clearWarnsFromPanel('${w.uid}')">🗑 ล้าง</button>
-          </div>`).join('')}
-      </div>`;
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
-  }
-}
-
-async function clearWarnsFromPanel(uid) {
-  if (!currentGuild) return;
-  await apiFetch(`/api/guild/${currentGuild.id}/clearwarns`, {
-    method: 'POST',
-    body: JSON.stringify({ userId: uid }),
-  });
-  showToast(`✅ ล้าง warns ของ ${uid} แล้ว`, 'success');
-  loadWarns(currentGuild.id);
-}
-
-// ── Logs ─────────────────────────────────────────────────────
-let allLogs = [];
-let logProfileCache = {};
-
-async function loadLogs(gid) {
-  const el = document.getElementById('logs-content');
-  el.innerHTML = '<div class="spinner"></div>';
-  document.getElementById('logs-sub').textContent = 'กำลังโหลด...';
-  document.getElementById('logs-search-bar').style.display = 'flex';
-  try {
-    const data = await apiFetch(`/api/guild/${gid}/actionlogs`);
-    allLogs = data.logs || [];
-    document.getElementById('logs-sub').textContent = `บันทึกล่าสุด ${allLogs.length} รายการ`;
-    // แสดงตารางก่อนเลย (ยังไม่มีรูป)
-    renderLogsTable(allLogs);
-    // โหลดโปรไฟล์ใน background แบบ batch ทีละ 5
-    const uniqueUids = [...new Set(allLogs.map(l => l.uid).filter(Boolean))].filter(u => !logProfileCache[u]);
-    for (let i = 0; i < uniqueUids.length; i += 5) {
-      const batch = uniqueUids.slice(i, i + 5);
-      await Promise.allSettled(batch.map(async uid => {
-        try {
-          const p = await apiFetch(`/api/user/${uid}/profile`);
-          logProfileCache[uid] = p;
-        } catch(_) {
-          logProfileCache[uid] = { id: uid, username: uid, displayName: uid, avatar: null };
-        }
-      }));
-      // re-render หลังแต่ละ batch เพื่อให้รูปค่อยๆ โผล่
-      const filterUid = document.getElementById('log-uid-input')?.value.trim();
-      const filtered  = filterUid ? allLogs.filter(l => l.uid === filterUid) : allLogs;
-      renderLogsTable(filtered);
-    }
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
-  }
-}
-
-function renderLogsTable(logs) {
-  const el = document.getElementById('logs-content');
-  if (!logs.length) {
-    el.innerHTML = '<p style="color:var(--muted2);padding:20px 0">ไม่พบ log</p>';
-    return;
-  }
-  el.innerHTML = `
-    <div class="log-card">
-      <table class="log-table">
-        <thead>
-          <tr>
-            <th>เวลา</th>
-            <th>User</th>
-            <th>กิจกรรม</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${logs.map(({ uid, line }) => {
-            const match  = line.match(/^\[(.+?)\]\s(.+)$/);
-            const time   = match ? new Date(match[1]).toLocaleString('th-TH') : '';
-            const action = match ? match[2] : line;
-            const p      = logProfileCache[uid] || {};
-            const name   = p.displayName || p.username || uid;
-            const avatar = p.avatar;
-            const avatarHtml = avatar
-              ? `<img src="${escHtml(avatar)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:7px;flex-shrink:0;cursor:pointer" onerror="this.style.display='none'" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')">`
-              : `<span style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--accent);align-items:center;justify-content:center;font-weight:700;font-size:12px;margin-right:7px;flex-shrink:0;vertical-align:middle;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')">${escHtml((name[0]||'?').toUpperCase())}</span>`;
-            return `<tr>
-              <td class="log-time">${escHtml(time)}</td>
-              <td class="log-uid" style="white-space:nowrap;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')" title="คลิกเพื่อดูโปรไฟล์">
-                <div style="display:flex;align-items:center">
-                  ${avatarHtml}
-                  <div>
-                    <div style="font-size:13px;font-weight:500">${escHtml(name)}</div>
-                    <div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${escHtml(uid)}</div>
-                  </div>
-                </div>
-              </td>
-              <td class="log-action">${escHtml(action)}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-    </div>`;
-}
-
-function filterLogs() {
-  const uid = document.getElementById('log-uid-input').value.trim();
-  if (!uid) { renderLogsTable(allLogs); return; }
-  renderLogsTable(allLogs.filter(l => l.uid === uid));
-}
-async function filterByUid(uid) {
-  document.getElementById('log-uid-input').value = uid;
-  // โหลดโปรไฟล์ถ้ายังไม่มีใน cache
-  if (!logProfileCache[uid]) {
-    try {
-      const p = await apiFetch(`/api/user/${uid}/profile`);
-      logProfileCache[uid] = p;
-    } catch(_) {
-      logProfileCache[uid] = { id: uid, username: uid, displayName: uid, avatar: null };
+  if (raidMap[guild.id].length >= settings.raidThresh) {
+    raidMap[guild.id] = [];
+    await appendActionLog(guild.id, 'SYSTEM', `Raid detected — ${settings.raidThresh} joins in ${settings.raidWindow}s`);
+    if (settings.logNotify?.raid) {
+      await sendLog(guild, settings, makeEmbed(0xed4245, '🚨 Raid Detected!',
+        `มีคนเข้าเซิร์ฟ ${settings.raidThresh} คนใน ${settings.raidWindow} วินาที!`,
+        [{ name: 'คำแนะนำ', value: 'เปิด slowmode หรือ lockdown ชั่วคราว' }]));
     }
   }
-  filterLogs();
-}
-function clearLogFilter() {
-  document.getElementById('log-uid-input').value = '';
-  renderLogsTable(allLogs);
 }
 
-// ── Messages (Chat Log) ──────────────────────────────────────
-let allMessages = [];
+// ─── Nuke Protection ──────────────────────────────────────────────────────────
+async function checkNuke(guild, settings) {
+  if (!settings.nukeProtect) return;
+  if (!nukeMap[guild.id]) nukeMap[guild.id] = [];
+  const now = Date.now();
+  nukeMap[guild.id] = nukeMap[guild.id].filter(t => now - t < 10000);
+  nukeMap[guild.id].push(now);
 
-async function loadMessages(gid) {
-  const el = document.getElementById('messages-content');
-  el.innerHTML = '<div class="spinner"></div>';
-  document.getElementById('messages-sub').textContent = 'กำลังโหลด...';
-  try {
-    const data = await apiFetch(`/api/guild/${gid}/messages`);
-    allMessages = data.messages || [];
-    document.getElementById('messages-sub').textContent =
-      `${allMessages.length} ข้อความล่าสุด (สูงสุด 500)`;
-    renderMessages(allMessages);
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
+  if (nukeMap[guild.id].length >= settings.nukeThresh) {
+    nukeMap[guild.id] = [];
+    await appendActionLog(guild.id, 'SYSTEM', `Nuke attempt detected — ${settings.nukeThresh} channel deletes in 10s`);
+    if (settings.logNotify?.nuke) {
+      await sendLog(guild, settings, makeEmbed(0xed4245, '💣 Nuke Attempt Detected!',
+        `มีการลบห้อง ${settings.nukeThresh} ห้องใน 10 วินาที!`,
+        [{ name: 'คำแนะนำ', value: 'ตรวจสอบ audit log ทันที' }]));
+    }
   }
 }
 
-function renderMessages(msgs) {
-  const el = document.getElementById('messages-content');
-  if (!msgs.length) {
-    el.innerHTML = '<p style="color:var(--muted2);padding:20px 0">ไม่พบข้อความ</p>';
-    return;
-  }
-
-  // group by date
-  const groups = {};
-  msgs.forEach(m => {
-    const d = new Date(m.ts).toLocaleDateString('th-TH', { year:'numeric', month:'long', day:'numeric', weekday:'long' });
-    if (!groups[d]) groups[d] = [];
-    groups[d].push(m);
-  });
-
-  let html = '<div class="msg-feed">';
-  for (const [date, list] of Object.entries(groups)) {
-    html += `<div class="msg-group-header">─── ${escHtml(date)} ───</div>`;
-    list.forEach(m => {
-      const name    = m.tag?.split('#')[0] || m.uid;
-      const timeStr = new Date(m.ts).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit' });
-      const delBadge = m.deleted
-        ? `<span class="msg-deleted-badge">🗑 ถูกลบ${m.deletedAt ? ' เวลา ' + new Date(m.deletedAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}) : ''}</span>`
-        : '';
-      const deletedContentNote = m.deleted
-        ? `<div style="font-size:11px;color:var(--red);margin-top:3px">⚠️ ข้อความนี้ถูกลบแล้ว แต่ยังบันทึกไว้</div>`
-        : '';
-      const avatarHtml = m.avatar
-        ? `<img class="msg-avatar" src="${escHtml(m.avatar)}" onerror="this.outerHTML='<div class=msg-avatar-fallback onclick=showProfilePopup(&#39;${escHtml(m.uid)}&#39;,this,&#39;${currentGuild?.id||''}&#39;)>${escHtml((name[0]||'?').toUpperCase())}</div>'" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">`
-        : `<div class="msg-avatar-fallback" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">${escHtml((name[0]||'?').toUpperCase())}</div>`;
-
-      html += `
-        <div class="msg-row${m.deleted ? ' deleted' : ''}">
-          ${avatarHtml}
-          <div class="msg-body">
-            <div class="msg-header">
-              <span class="msg-author" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">${escHtml(name)}</span>
-              <span class="msg-uid">${escHtml(m.uid)}</span>
-              <span class="msg-channel">#${escHtml(m.channel)}</span>
-              <span class="msg-time">${escHtml(timeStr)}</span>
-              ${delBadge}
-            </div>
-            <div class="msg-content${m.deleted ? ' deleted-text' : ''}">${escHtml(m.content)}</div>
-            ${deletedContentNote}
-          </div>
-        </div>`;
-    });
-  }
-  html += '</div>';
-  el.innerHTML = html;
-}
-
-// กดดูข้อความของ user คนนั้นจาก profile popup
-async function viewUserMessages(uid) {
-  if (!currentGuild) return;
-  // ไปหน้า messages แล้วกรองทันที
-  navTo('messages');
-  document.getElementById('msg-uid-input').value = uid;
-  document.getElementById('msg-ch-input').value  = '';
-  document.getElementById('msg-del-only').checked = false;
-  const el = document.getElementById('messages-content');
-  el.innerHTML = '<div class="spinner"></div>';
-  try {
-    const params = new URLSearchParams({ uid });
-    const data = await apiFetch(`/api/guild/${currentGuild.id}/messages?${params}`);
-    allMessages = data.messages || [];
-    const p = logProfileCache[uid];
-    const name = p?.displayName || p?.username || uid;
-    document.getElementById('messages-sub').textContent = `ข้อความของ ${name} — พบ ${allMessages.length} ข้อความ`;
-    renderMessages(allMessages);
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
+// ─── Watchlist check ──────────────────────────────────────────────────────────
+async function checkWatchlist(guildId, userId, event, settings, guild) {
+  const list = await getWatchlist(guildId);
+  if (!list.includes(userId)) return;
+  await appendActionLog(guildId, userId, `Watchlist alert: ${event}`);
+  if (settings.logNotify?.watchlist) {
+    await sendLog(guild, settings, makeEmbed(0x5865f2, '👁️ Watchlist Alert',
+      `<@${userId}> — ${event}`));
   }
 }
 
-async function filterMessages() {
-  if (!currentGuild) return;
-  const uid = document.getElementById('msg-uid-input').value.trim();
-  const ch  = document.getElementById('msg-ch-input').value.trim();
-  const del = document.getElementById('msg-del-only').checked;
-  const params = new URLSearchParams();
-  if (uid) params.set('uid', uid);
-  if (ch)  params.set('channel', ch);
-  if (del) params.set('deleted', 'true');
-  const el = document.getElementById('messages-content');
-  el.innerHTML = '<div class="spinner"></div>';
-  try {
-    const data = await apiFetch(`/api/guild/${currentGuild.id}/messages?${params}`);
-    allMessages = data.messages || [];
-    document.getElementById('messages-sub').textContent = `พบ ${allMessages.length} ข้อความ`;
-    renderMessages(allMessages);
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
+// ─── New Account Check ────────────────────────────────────────────────────────
+async function checkNewAccount(member, settings) {
+  const accountAge = Date.now() - member.user.createdTimestamp;
+  const ageDays    = Math.floor(accountAge / 86400000);
+  if (ageDays >= 30) return;
+
+  const dismissed = await getDismissed(member.guild.id);
+  if (dismissed.includes(member.id)) return;
+
+  const list = await getNewAccs(member.guild.id);
+  if (list.find(a => a.id === member.id)) return;
+
+  const entry = {
+    id:       member.id,
+    tag:      member.user.tag,
+    avatar:   member.user.displayAvatarURL({ size: 64 }),
+    ageDays,
+    joinedAt: member.joinedTimestamp,
+  };
+  list.unshift(entry);
+  if (list.length > 200) list.length = 200;
+  await saveNewAccs(member.guild.id, list);
+
+  if (settings.logNotify?.newAccount) {
+    await sendLog(member.guild, settings, makeEmbed(0xfaa61a, '🆕 New Account Joined',
+      `<@${member.id}> (${member.user.tag}) อายุบัญชีแค่ **${ageDays} วัน**!`));
   }
 }
 
-function clearMsgFilter() {
-  document.getElementById('msg-uid-input').value = '';
-  document.getElementById('msg-ch-input').value  = '';
-  document.getElementById('msg-del-only').checked = false;
-  if (currentGuild) loadMessages(currentGuild.id);
-}
-
-// ── Toast ────────────────────────────────────────────────────
-let toastTimer;
-function showToast(msg, type='') {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.className = 'toast show ' + type;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
-}
-
-// ── Helpers ──────────────────────────────────────────────────
-function escHtml(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-// ── Auto-restore session ─────────────────────────────────────
-window.addEventListener('DOMContentLoaded', () => {
-  const t = localStorage.getItem('panel_token');
-  const u = localStorage.getItem('panel_url');
-  if (t && u) {
-    TOKEN = t; API = u;
-    document.getElementById('token-input').value = t;
-    document.getElementById('url-input').value = u;
-    initApp();
-  }
-  // Enter to login
-  document.getElementById('token-input').addEventListener('keydown', e => { if(e.key==='Enter') document.getElementById('url-input').focus(); });
-  document.getElementById('url-input').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+// ─── Discord Events ───────────────────────────────────────────────────────────
+client.once(Events.ClientReady, () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 });
-</script>
-</body>
-</html>
+
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot) return;
+  if (!message.guild)     return;
+
+  // บันทึกข้อความ
+  await storeMessage(message.guildId, {
+    id:      message.id,
+    uid:     message.author.id,
+    tag:     message.author.tag,
+    avatar:  message.author.displayAvatarURL({ size: 64 }),
+    content: message.content,
+    channel: message.channel.name,
+    ts:      message.createdTimestamp,
+    deleted: false,
+  });
+
+  const settings = await getSettings(message.guildId);
+  const member   = await message.guild.members.fetch(message.author.id).catch(() => null);
+  if (member?.permissions.has(PermissionFlagsBits.Administrator)) return;
+
+  await checkSpam(message, settings);
+  await checkInvite(message, settings);
+  await checkToken(message, settings);
+  await checkGhostPing(message);
+  await checkWatchlist(message.guildId, message.author.id, 'ส่งข้อความ', settings, message.guild);
+});
+
+client.on(Events.MessageDelete, async (message) => {
+  if (!message.guild || message.author?.bot) return;
+  // mark as deleted in store
+  const key  = `messages:${message.guildId}`;
+  const raw  = await redis.get(key);
+  const msgs = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : [];
+  const idx  = msgs.findIndex(m => m.id === message.id);
+  if (idx !== -1) {
+    msgs[idx].deleted   = true;
+    msgs[idx].deletedAt = Date.now();
+    await redis.set(key, JSON.stringify(msgs));
+  }
+
+  const settings = await getSettings(message.guildId);
+  await handleDeletedGhostPing(message, settings);
+});
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  const settings = await getSettings(member.guild.id);
+  await checkRaid(member, settings);
+  await checkNewAccount(member, settings);
+  await checkWatchlist(member.guild.id, member.id, 'เข้าเซิร์ฟเวอร์', settings, member.guild);
+
+  if (settings.logNotify?.memberJoin) {
+    await sendLog(member.guild, settings, makeEmbed(0x3ba55d, '🚪 Member Joined',
+      `<@${member.id}> (${member.user.tag}) เข้าเซิร์ฟแล้ว`));
+  }
+});
+
+client.on(Events.ChannelDelete, async (channel) => {
+  if (!channel.guild) return;
+  const settings = await getSettings(channel.guild.id);
+  await checkNuke(channel.guild, settings);
+});
+
+// ─── HTTP Panel API ───────────────────────────────────────────────────────────
+function cors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+}
+
+function jsonRes(res, data, status = 200) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+function authCheck(req, res) {
+  const auth = req.headers['authorization'] || '';
+  if (auth !== `Bearer ${PANEL_TOKEN}`) {
+    jsonRes(res, { error: 'Unauthorized' }, 401);
+    return false;
+  }
+  return true;
+}
+
+async function readBody(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try { resolve(JSON.parse(body)); } catch { resolve({}); }
+    });
+  });
+}
+
+async function userProfile(userId) {
+  try {
+    const u = await client.users.fetch(userId, { force: true });
+    return {
+      id:          u.id,
+      username:    u.username,
+      displayName: u.displayName || u.username,
+      avatar:      u.displayAvatarURL({ size: 128 }),
+      banner:      u.bannerURL?.({ size: 256 }) || null,
+      accentColor: u.accentColor || null,
+      bot:         u.bot,
+      createdAt:   u.createdTimestamp,
+    };
+  } catch {
+    return { id: userId, username: userId, displayName: userId, avatar: null };
+  }
+}
+
+const server = http.createServer(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+  const parsed   = url.parse(req.url, true);
+  const pathname = parsed.pathname;
+  const query    = parsed.query;
+
+  // ── Serve panel.html ──────────────────────────────────────────────────────
+  if (pathname === '/' || pathname === '/panel') {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'panel.html'), 'utf8');
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html);
+    return;
+  }
+
+  // ── API routes ────────────────────────────────────────────────────────────
+  if (!pathname.startsWith('/api')) {
+    res.writeHead(404); res.end('Not found'); return;
+  }
+
+  if (!authCheck(req, res)) return;
+
+  // GET /api/guilds
+  if (pathname === '/api/guilds' && req.method === 'GET') {
+    const guilds = client.guilds.cache.map(g => ({
+      id:          g.id,
+      name:        g.name,
+      icon:        g.iconURL({ size: 64 }),
+      memberCount: g.memberCount,
+    }));
+    return jsonRes(res, guilds);
+  }
+
+  // GET /api/user/:uid/profile
+  const userMatch = pathname.match(/^\/api\/user\/([^/]+)\/profile$/);
+  if (userMatch && req.method === 'GET') {
+    return jsonRes(res, await userProfile(userMatch[1]));
+  }
+
+  // Guild-specific routes
+  const guildMatch = pathname.match(/^\/api\/guild\/([^/]+)(\/.*)?$/);
+  if (!guildMatch) { res.writeHead(404); res.end(); return; }
+
+  const guildId  = guildMatch[1];
+  const subpath  = guildMatch[2] || '';
+  const guild    = client.guilds.cache.get(guildId);
+  if (!guild) return jsonRes(res, { error: 'Guild not found' }, 404);
+
+  const settings = await getSettings(guildId);
+
+  // GET /api/guild/:id
+  if (subpath === '' && req.method === 'GET') {
+    const channels = guild.channels.cache
+      .filter(c => c.type === ChannelType.GuildText)
+      .map(c => ({ id: c.id, name: c.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const watchlist = await getWatchlist(guildId);
+    return jsonRes(res, {
+      id: guild.id, name: guild.name,
+      memberCount: guild.memberCount,
+      settings, channels, watchlist,
+    });
+  }
+
+  // POST /api/guild/:id/settings
+  if (subpath === '/settings' && req.method === 'POST') {
+    const body = await readBody(req);
+    await saveSettings(guildId, body);
+    return jsonRes(res, { ok: true });
+  }
+
+  // GET /api/guild/:id/warns
+  if (subpath === '/warns' && req.method === 'GET') {
+    const warns = await getWarns(guildId);
+    const list  = Object.entries(warns).map(([uid, w]) => ({ uid, ...w }));
+    return jsonRes(res, { warns: list });
+  }
+
+  // POST /api/guild/:id/clearwarns
+  if (subpath === '/clearwarns' && req.method === 'POST') {
+    const body  = await readBody(req);
+    const warns = await getWarns(guildId);
+    delete warns[body.userId];
+    await saveWarns(guildId, warns);
+    return jsonRes(res, { ok: true });
+  }
+
+  // GET /api/guild/:id/actionlogs
+  if (subpath === '/actionlogs' && req.method === 'GET') {
+    const raw  = await redis.get(`actionlogs:${guildId}`);
+    const logs = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : [];
+    return jsonRes(res, { logs });
+  }
+
+  // GET /api/guild/:id/messages
+  if (subpath === '/messages' && req.method === 'GET') {
+    let msgs = await getMessages(guildId);
+    if (query.uid)     msgs = msgs.filter(m => m.uid === query.uid);
+    if (query.channel) msgs = msgs.filter(m => m.channel?.includes(query.channel));
+    if (query.deleted) msgs = msgs.filter(m => m.deleted);
+    return jsonRes(res, { messages: msgs.slice(0, 500) });
+  }
+
+  // GET /api/guild/:id/newaccs
+  if (subpath === '/newaccs' && req.method === 'GET') {
+    const dismissed = await getDismissed(guildId);
+    const list = (await getNewAccs(guildId)).filter(a => !dismissed.includes(a.id));
+    return jsonRes(res, { accounts: list });
+  }
+
+  // POST /api/guild/:id/dismiss-newacc
+  if (subpath === '/dismiss-newacc' && req.method === 'POST') {
+    const body = await readBody(req);
+    const raw  = await redis.get(`dismissed:${guildId}`);
+    const list = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : [];
+    if (!list.includes(body.userId)) list.push(body.userId);
+    await redis.set(`dismissed:${guildId}`, JSON.stringify(list));
+    return jsonRes(res, { ok: true });
+  }
+
+  // POST /api/guild/:id/watchlist
+  if (subpath === '/watchlist' && req.method === 'POST') {
+    const body = await readBody(req);
+    const list = await getWatchlist(guildId);
+    if (body.action === 'add' && !list.includes(body.userId)) {
+      list.push(body.userId);
+      await appendActionLog(guildId, body.userId, 'Added to watchlist via Panel');
+    } else if (body.action === 'remove') {
+      const idx = list.indexOf(body.userId);
+      if (idx !== -1) list.splice(idx, 1);
+      await appendActionLog(guildId, body.userId, 'Removed from watchlist via Panel');
+    }
+    await saveWatchlist(guildId, list);
+    return jsonRes(res, { ok: true });
+  }
+
+  // POST /api/guild/:id/mute
+  if (subpath === '/mute' && req.method === 'POST') {
+    const body = await readBody(req);
+    await muteUser(guild, body.userId, body.minutes || 10, body.reason || 'Muted via Panel');
+    await appendActionLog(guildId, body.userId, `Muted ${body.minutes || 10} นาที via Panel — ${body.reason || ''}`);
+    if (settings.logNotify?.mute) {
+      await sendLog(guild, settings, makeEmbed(0xf97316, '🔇 User Muted',
+        `<@${body.userId}> ถูก mute ${body.minutes} นาที จาก Panel`));
+    }
+    return jsonRes(res, { ok: true });
+  }
+
+  // POST /api/guild/:id/unmute
+  if (subpath === '/unmute' && req.method === 'POST') {
+    const body = await readBody(req);
+    await unmuteUser(guild, body.userId);
+    await appendActionLog(guildId, body.userId, 'Unmuted via Panel');
+    if (settings.logNotify?.mute) {
+      await sendLog(guild, settings, makeEmbed(0x3ba55d, '🔊 User Unmuted',
+        `<@${body.userId}> ถูก unmute จาก Panel`));
+    }
+    return jsonRes(res, { ok: true });
+  }
+
+  // POST /api/guild/:id/ban
+  if (subpath === '/ban' && req.method === 'POST') {
+    const body   = await readBody(req);
+    const member = await guild.members.fetch(body.userId).catch(() => null);
+    if (!member) return jsonRes(res, { error: 'Member not found' }, 404);
+    await member.ban({ reason: body.reason || 'Banned via Panel' });
+    await appendActionLog(guildId, body.userId, `Banned via Panel — ${body.reason || ''}`);
+    if (settings.logNotify?.ban) {
+      await sendLog(guild, settings, makeEmbed(0xed4245, '🔨 User Banned',
+        `<@${body.userId}> ถูก ban จาก Panel`,
+        [{ name: 'เหตุผล', value: body.reason || '—' }]));
+    }
+    return jsonRes(res, { ok: true });
+  }
+
+  res.writeHead(404); res.end('Not found');
+});
+
+// ─── Keep-alive (Render free tier) ───────────────────────────────────────────
+setInterval(() => {
+  http.get(`http://localhost:${PORT}/`).on('error', () => {});
+}, 14 * 60 * 1000); // ping ตัวเองทุก 14 นาที
+
+// ─── Start ────────────────────────────────────────────────────────────────────
+server.listen(PORT, () => console.log(`🌐 Panel server running on port ${PORT}`));
+client.login(DISCORD_TOKEN);
