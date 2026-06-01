@@ -37,6 +37,32 @@ const INVITE_REGEX    = /discord(?:\.gg|(?:app)?\.com\/invite)\/([a-zA-Z0-9\-]+)
 const ALLOWED_INVITES = (process.env.ALLOWED_INVITES || '')
   .split(',').map(c => c.trim().toLowerCase()).filter(Boolean);
 
+// ── anti-token grabber config ──────────────────────────────
+// โทเคน Discord จริงมี 3 ส่วนคั่นด้วย . (base64.base64.base64)
+const TOKEN_REGEX = /[MN][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38}/g;
+
+// domains ที่รู้จักว่าเป็น token grabber / IP logger / phishing
+const GRABBER_DOMAINS = [
+  // token grabbers / stealers ที่พบบ่อย
+  'grabify.link','iplogger.org','iplogger.com','2no.co','yip.su',
+  'ps3cfw.com','loveget.ga','blasze.com','leakinfo.net',
+  'discord-nitro.gift','discordnitro.gift','dlscord.com','dicsord.com',
+  'steamcommunity.ru','steamcornmunity.com','freestuff.gg',
+  'discord-app.com','discord-gifts.com','disccord.com',
+  'luna.fyi','ngrok.io','ngrok.app',            // tunnel ที่ใช้ host grabber
+  'webhook.site','pipedream.net',               // webhook collectors
+  // URL shortener ที่ใช้ซ่อนลิงก์อันตราย
+  'bit.ly','tinyurl.com','rebrand.ly','cutt.ly',
+  't.co','rb.gy','is.gd','v.gd','gg.gg',
+];
+
+// คำที่มักอยู่ใน path ของ grabber script
+const GRABBER_PATH_PATTERNS = [
+  /\/token/i, /\/grab/i, /\/steal/i, /\/webhook/i,
+  /\/nitro/i, /\/gift/i, /\/free/i, /\/giveaway/i,
+  /login\.php/i, /auth\.php/i,
+];
+
 // ── in-memory cache สำหรับ log channel (ไม่ต้อง fetch ทุกครั้ง) ──
 const logChannelCache = new Map(); // guildId → channel | null
 
@@ -173,6 +199,85 @@ async function checkInvite(msg) {
   }
 }
 
+// ── anti-token grabber ─────────────────────────────────────
+async function checkTokenGrabber(msg) {
+  const content = msg.content;
+  const reasons = [];
+
+  // 1) ตรวจ Discord token จริงหลุดในข้อความ
+  const tokenMatches = content.match(TOKEN_REGEX);
+  if (tokenMatches) {
+    reasons.push(`พบ Discord Token ในข้อความ (${tokenMatches.length} รายการ)`);
+  }
+
+  // 2) ตรวจ URL ในข้อความ
+  const urlMatches = [...content.matchAll(/https?:\/\/([^\s/]+)(\/[^\s]*)?/gi)];
+  for (const match of urlMatches) {
+    const domain = match[1].toLowerCase().replace(/^www\./, '');
+    const path   = match[2] || '';
+
+    // ตรวจ domain blacklist
+    if (GRABBER_DOMAINS.some(d => domain === d || domain.endsWith('.' + d))) {
+      reasons.push(`พบ domain อันตราย: \`${domain}\``);
+    }
+
+    // ตรวจ path pattern ที่น่าสงสัย
+    for (const pattern of GRABBER_PATH_PATTERNS) {
+      if (pattern.test(path)) {
+        reasons.push(`พบ URL pattern อันตราย: \`${match[0].slice(0, 60)}\``);
+        break;
+      }
+    }
+
+    // ตรวจ Discord webhook URL (ไม่ควรส่งใน chat)
+    if (/discord(?:app)?\.com\/api\/webhooks\//i.test(match[0])) {
+      reasons.push(`พบ Discord Webhook URL (อาจใช้ดึงข้อมูล)`);
+    }
+  }
+
+  if (!reasons.length) return;
+
+  // ลบข้อความทันที (fire-and-forget)
+  msg.delete().catch(() => {});
+  logAction(msg.author.id, msg.guild.id,
+    `TOKEN GRABBER DETECTED: ${reasons.join(' | ')}`);
+  console.log(`[Anti-Token] ${msg.author.tag} — ${reasons.join(', ')}`);
+
+  const log = getLog(msg.guild);
+
+  // เตือนใน log channel
+  const alertEmbed = new EmbedBuilder()
+    .setColor('#ED4245')
+    .setTitle('🚨 Token Grabber Detected')
+    .setDescription([
+      `**ผู้ส่ง:** ${msg.author.tag} (\`${msg.author.id}\`) → <@${msg.author.id}>`,
+      `**ห้อง:** <#${msg.channel.id}>`,
+      `**เหตุผล:**\n${reasons.map(r => `> • ${r}`).join('\n')}`,
+      '',
+      `**ข้อความ (ถูกลบแล้ว):**\n\`\`\`${content.slice(0, 300).replace(/`/g, '\'')}\`\`\``,
+    ].join('\n'))
+    .setTimestamp();
+
+  // แบนทันทีเลย เพราะ token grabber = เจตนาร้ายชัดเจน
+  try {
+    await msg.member.ban({
+      deleteMessageSeconds: 3600,
+      reason: `Auto-ban: Token Grabber — ${reasons[0]}`,
+    });
+    alertEmbed.addFields({ name: '🔨 ดำเนินการ', value: '**Ban ถาวรอัตโนมัติแล้ว**' });
+  } catch (err) {
+    alertEmbed.addFields({
+      name: '❌ Ban ไม่สำเร็จ',
+      value: `\`${err.message}\`\nตรวจสอบ role บอทและสิทธิ์ Ban Members`,
+    });
+  }
+
+  (log
+    ? log.send({ embeds: [alertEmbed] })
+    : msg.channel.send({ embeds: [alertEmbed] })
+  ).catch(() => {});
+}
+
 // ── events ────────────────────────────────────────────────
 client.on('messageDelete', async (msg) => {
   if (msg.author?.bot) return;
@@ -252,6 +357,9 @@ client.on('messageCreate', async (msg) => {
   const isModUser = isMod(msg.member);
 
   if (!isModUser) {
+    // ตรวจ token grabber ก่อนเลย (อันตรายที่สุด → ban ทันที)
+    await checkTokenGrabber(msg);
+
     // ตรวจ spam + invite พร้อมกัน (parallel) ไม่รอสายใดสายนึงก่อน
     const inSpamChannel = !SPAM_CHANNELS.length || SPAM_CHANNELS.includes(msg.channel.id);
     const checks = [];
@@ -415,19 +523,168 @@ client.on('messageCreate', async (msg) => {
           { name: `\`${PREFIX}lockdown\``,              value: 'ล็อคห้อง (mod)' },
           { name: `\`${PREFIX}unlock\``,                value: 'เปิดห้อง (mod)' },
         )
-        .setFooter({ text: `Spam: ${SPAM_MSG_LIMIT} ข้อความ/${SPAM_WINDOW_SEC}วิ → warn×${WARN_BEFORE_BAN} → ban | Invite: warn×${WARN_BEFORE_BAN} → ban` })
+        .addFields({ name: '🛡️ Auto-Protection', value: '`Anti-Spam` `Anti-Invite` `Anti-TokenGrabber` `Ghost-Ping` `Raid-Detect` `Nuke-Detect`' })
+        .setFooter({ text: `Spam: ${SPAM_MSG_LIMIT} ข้อความ/${SPAM_WINDOW_SEC}วิ → warn×${WARN_BEFORE_BAN} → ban | Invite: warn×${WARN_BEFORE_BAN} → ban | Token Grabber → ban ทันที` })
     ]});
   }
 });
 
-// ── keep-alive (Render Web Service) ───────────────────────
-const server = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('OK');
+// ── Panel API Server ───────────────────────────────────────
+const fs   = require('fs');
+const path = require('path');
+
+const PANEL_TOKEN = process.env.PANEL_TOKEN || 'changeme'; // ตั้งใน .env
+
+function cors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+}
+function json(res, code, data) {
+  cors(res);
+  res.writeHead(code, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+function authFail(res) { json(res, 401, { error: 'Unauthorized' }); }
+function checkAuth(req) {
+  const h = req.headers['authorization'] || '';
+  return h === `Bearer ${PANEL_TOKEN}`;
+}
+function body(req) {
+  return new Promise(resolve => {
+    let d = '';
+    req.on('data', c => d += c);
+    req.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve({}); } });
+  });
+}
+
+const PANEL_HTML = path.join(__dirname, 'panel.html');
+
+const server = http.createServer(async (req, res) => {
+  const u = new URL(req.url, `http://localhost`);
+
+  // OPTIONS preflight
+  if (req.method === 'OPTIONS') { cors(res); res.writeHead(204); res.end(); return; }
+
+  // ── serve panel.html ──────────────────────────────────────
+  if (u.pathname === '/' || u.pathname === '/panel') {
+    if (fs.existsSync(PANEL_HTML)) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(fs.readFileSync(PANEL_HTML));
+    } else {
+      res.writeHead(404); res.end('panel.html not found');
+    }
+    return;
+  }
+
+  // ── health check ─────────────────────────────────────────
+  if (u.pathname === '/health') { json(res, 200, { ok: true }); return; }
+
+  // ── API routes (ต้อง auth ทุกอัน) ───────────────────────
+  if (!u.pathname.startsWith('/api/')) { res.writeHead(404); res.end(); return; }
+  if (!checkAuth(req)) { authFail(res); return; }
+
+  // GET /api/guilds — รายชื่อเซิร์ฟที่บอทอยู่
+  if (u.pathname === '/api/guilds' && req.method === 'GET') {
+    const guilds = client.guilds.cache.map(g => ({
+      id: g.id, name: g.name,
+      icon: g.iconURL({ size: 64 }) || null,
+      memberCount: g.memberCount,
+    }));
+    return json(res, 200, guilds);
+  }
+
+  // GET /api/guild/:id — ข้อมูลเซิร์ฟ + channels + settings จาก Redis
+  if (u.pathname.match(/^\/api\/guild\/(\d+)$/) && req.method === 'GET') {
+    const gid   = u.pathname.split('/')[3];
+    const guild = client.guilds.cache.get(gid);
+    if (!guild) return json(res, 404, { error: 'Guild not found' });
+
+    const [settingsRaw, watchlistRaw] = await Promise.allSettled([
+      redis.get(`panelcfg:${gid}`),
+      redis.smembers(`watchlist:${gid}`),
+    ]);
+
+    const settings = (settingsRaw.status === 'fulfilled' && settingsRaw.value)
+      ? (typeof settingsRaw.value === 'string' ? JSON.parse(settingsRaw.value) : settingsRaw.value)
+      : {};
+
+    const channels = guild.channels.cache
+      .filter(c => c.type === 0) // GUILD_TEXT
+      .map(c => ({ id: c.id, name: c.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return json(res, 200, {
+      id: guild.id, name: guild.name,
+      icon: guild.iconURL({ size: 128 }) || null,
+      memberCount: guild.memberCount,
+      channels,
+      watchlist: watchlistRaw.status === 'fulfilled' ? (watchlistRaw.value || []) : [],
+      settings: {
+        // defaults จาก env ถ้ายังไม่เคยตั้ง
+        logChannelId:   settings.logChannelId   ?? (LOG_CHANNEL || ''),
+        spamChannelIds: settings.spamChannelIds ?? SPAM_CHANNELS,
+        spamMsgLimit:   settings.spamMsgLimit   ?? SPAM_MSG_LIMIT,
+        spamWindowSec:  settings.spamWindowSec  ?? SPAM_WINDOW_SEC,
+        warnBeforeBan:  settings.warnBeforeBan  ?? WARN_BEFORE_BAN,
+        raidThresh:     settings.raidThresh     ?? RAID_THRESH,
+        raidWindow:     settings.raidWindow     ?? RAID_WINDOW,
+        nukeThresh:     settings.nukeThresh     ?? NUKE_THRESH,
+        allowedInvites: settings.allowedInvites ?? ALLOWED_INVITES,
+        antiSpam:       settings.antiSpam       ?? true,
+        antiInvite:     settings.antiInvite     ?? true,
+        antiToken:      settings.antiToken      ?? true,
+        antiGhostPing:  settings.antiGhostPing  ?? true,
+        raidProtect:    settings.raidProtect    ?? true,
+        nukeProtect:    settings.nukeProtect    ?? true,
+      },
+    });
+  }
+
+  // POST /api/guild/:id/settings — บันทึก settings
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/settings$/) && req.method === 'POST') {
+    const gid  = u.pathname.split('/')[3];
+    const data = await body(req);
+    await redis.set(`panelcfg:${gid}`, JSON.stringify(data));
+    console.log(`[Panel] Settings saved for guild ${gid}`);
+    return json(res, 200, { ok: true });
+  }
+
+  // GET /api/guild/:id/logs/:userId — ดู user log
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/logs\/(\d+)$/) && req.method === 'GET') {
+    const parts  = u.pathname.split('/');
+    const gid    = parts[3];
+    const uid    = parts[5];
+    const logs   = await redis.lrange(`userlog:${gid}:${uid}`, 0, 49) || [];
+    return json(res, 200, { userId: uid, logs });
+  }
+
+  // POST /api/guild/:id/watchlist — add/remove watchlist
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/watchlist$/) && req.method === 'POST') {
+    const gid    = u.pathname.split('/')[3];
+    const { action, userId } = await body(req);
+    const key    = `watchlist:${gid}`;
+    if (action === 'add')    await redis.sadd(key, userId);
+    if (action === 'remove') await redis.srem(key, userId);
+    return json(res, 200, { ok: true });
+  }
+
+  // POST /api/guild/:id/clearwarns — ล้าง warns
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/clearwarns$/) && req.method === 'POST') {
+    const gid    = u.pathname.split('/')[3];
+    const { userId } = await body(req);
+    await Promise.allSettled([
+      redis.del(`spamwarn:${gid}:${userId}`),
+      redis.del(`invwarn:${gid}:${userId}`),
+    ]);
+    return json(res, 200, { ok: true });
+  }
+
+  res.writeHead(404); res.end();
 });
 
 server.listen(process.env.PORT || 3000, () => {
-  console.log(`🌐 HTTP server listening on port ${process.env.PORT || 3000}`);
+  console.log(`🌐 Panel server on port ${process.env.PORT || 3000}`);
   client.login(process.env.DISCORD_TOKEN);
 });
 
