@@ -411,6 +411,30 @@ client.on('messageCreate', async (msg) => {
   // logAction fire-and-forget (ไม่ต้อง await)
   logAction(msg.author.id, msg.guild?.id, `ส่งข้อความใน #${msg.channel.name}: "${msg.content.slice(0, 80)}"`);
 
+  // ── ตรวจ watchlist — ถ้า user อยู่ใน watchlist แจ้ง log ทันที ──
+  if (msg.guild) {
+    redis.sismember(`watchlist:${msg.guild.id}`, msg.author.id).then(inWatch => {
+      if (!inWatch) return;
+      const log = getLog(msg.guild);
+      if (!log) return;
+      log.send({ embeds: [
+        new EmbedBuilder()
+          .setColor('#ED4245')
+          .setTitle('👁 Watchlist — ส่งข้อความ')
+          .setThumbnail(msg.author.displayAvatarURL({ size: 64 }))
+          .setDescription([
+            `**User:** ${msg.author.tag} → <@${msg.author.id}>`,
+            `**ID:** \`${msg.author.id}\``,
+            `**ห้อง:** <#${msg.channel.id}>`,
+            `**ข้อความ:** ${msg.content.slice(0, 200) || '*(ไม่มีข้อความ)*'}`,
+            '',
+            `🔇 Mute ได้ที่หน้า **Watchlist** ใน Panel`,
+          ].join('\n'))
+          .setTimestamp()
+      ]});
+    }).catch(() => {});
+  }
+
   if (!msg.content.startsWith(PREFIX)) return;
   const [cmd, ...args] = msg.content.slice(1).trim().split(/\s+/);
   const cooldowns = client.cooldowns || (client.cooldowns = new Map());
@@ -817,6 +841,37 @@ const server = http.createServer(async (req, res) => {
       redis.del(`newaccinfo:${gid}:${userId}`),
     ]);
     return json(res, 200, { ok: true });
+  }
+
+  // POST /api/guild/:id/mute — timeout user X นาที
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/mute$/) && req.method === 'POST') {
+    const gid  = u.pathname.split('/')[3];
+    const { userId, minutes, reason } = await body(req);
+    const guild = client.guilds.cache.get(gid);
+    if (!guild) return json(res, 404, { error: 'Guild not found' });
+    try {
+      const member = await guild.members.fetch(userId);
+      await member.timeout(minutes * 60 * 1000, reason || `Muted via Panel (${minutes} นาที)`);
+      console.log(`[Panel] Muted ${userId} for ${minutes}m in guild ${gid}`);
+      return json(res, 200, { ok: true });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
+  }
+
+  // POST /api/guild/:id/unmute — ยกเลิก timeout
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/unmute$/) && req.method === 'POST') {
+    const gid  = u.pathname.split('/')[3];
+    const { userId } = await body(req);
+    const guild = client.guilds.cache.get(gid);
+    if (!guild) return json(res, 404, { error: 'Guild not found' });
+    try {
+      const member = await guild.members.fetch(userId);
+      await member.timeout(null);
+      return json(res, 200, { ok: true });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
   }
 
   res.writeHead(404); res.end();
