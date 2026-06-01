@@ -1183,28 +1183,49 @@ async function loadWatchlist(gid) {
   const el = document.getElementById('watchlist-content');
   el.innerHTML = '<div class="spinner"></div>';
   try {
-    // ดึง watchlist + โปรไฟล์ Discord จริงพร้อมกัน
-    const [guildData, profileData] = await Promise.all([
-      apiFetch(`/api/guild/${gid}`),
-      apiFetch(`/api/guild/${gid}/watchlist-profiles`).catch(() => ({ profiles: [] })),
-    ]);
-    const list     = guildData.watchlist || [];
-    const profiles = profileData.profiles || [];
-    const profileMap = {};
-    profiles.forEach(p => { profileMap[p.id] = p; });
-
+    // โหลด guild data ก่อน (เร็ว) แล้วแสดงทันที
+    const guildData = await apiFetch(`/api/guild/${gid}`);
+    const list = guildData.watchlist || [];
     document.getElementById('watchlist-sub').textContent =
       `${guildData.name} — ${list.length} คน`;
-    el.innerHTML = `
-      <div style="display:flex;gap:8px;margin-bottom:16px;max-width:400px">
-        <input type="text" id="watch-input" placeholder="User ID..." style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:8px 10px;outline:none">
-        <button class="btn btn-primary btn-sm" onclick="addToWatchlist()">+ เพิ่ม</button>
-      </div>
-      <div class="watch-list" id="watch-list">
-        ${list.length
-          ? list.map(uid => watchItem(uid, gid, profileMap[uid])).join('')
-          : '<p style="color:var(--muted2)">ไม่มี user ใน watchlist</p>'}
-      </div>`;
+
+    // แสดง list ก่อนโดยใช้ cache ที่มีอยู่แล้ว
+    const renderList = (profileMap) => {
+      el.innerHTML = `
+        <div style="display:flex;gap:8px;margin-bottom:16px;max-width:400px">
+          <input type="text" id="watch-input" placeholder="User ID..." style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:8px 10px;outline:none">
+          <button class="btn btn-primary btn-sm" onclick="addToWatchlist()">+ เพิ่ม</button>
+        </div>
+        <div class="watch-list" id="watch-list">
+          ${list.length
+            ? list.map(uid => watchItem(uid, gid, profileMap[uid])).join('')
+            : '<p style="color:var(--muted2)">ไม่มี user ใน watchlist</p>'}
+        </div>`;
+    };
+
+    // render ด้วย cache ที่มีก่อน (เร็ว)
+    const existingCache = {};
+    list.forEach(uid => { if (logProfileCache[uid]) existingCache[uid] = logProfileCache[uid]; });
+    renderList(existingCache);
+
+    // โหลด profiles ใน background แบบ batch ทีละ 3
+    const needFetch = list.filter(uid => !logProfileCache[uid]);
+    const profileMap = { ...existingCache };
+    for (let i = 0; i < needFetch.length; i += 3) {
+      const batch = needFetch.slice(i, i + 3);
+      await Promise.allSettled(batch.map(async uid => {
+        try {
+          const p = await apiFetch(`/api/user/${uid}/profile`);
+          logProfileCache[uid] = p;
+          profileMap[uid] = p;
+        } catch(_) {
+          const fallback = { id: uid, username: uid, displayName: uid, avatar: null };
+          logProfileCache[uid] = fallback;
+          profileMap[uid] = fallback;
+        }
+      }));
+      renderList(profileMap);
+    }
   } catch(e) {
     el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
   }
@@ -1440,20 +1461,25 @@ async function loadLogs(gid) {
     const data = await apiFetch(`/api/guild/${gid}/actionlogs`);
     allLogs = data.logs || [];
     document.getElementById('logs-sub').textContent = `บันทึกล่าสุด ${allLogs.length} รายการ`;
-
-    // ดึงโปรไฟล์ Discord สำหรับทุก uid ที่ไม่ซ้ำ
-    const uniqueUids = [...new Set(allLogs.map(l => l.uid).filter(Boolean))];
-    await Promise.allSettled(uniqueUids.map(async uid => {
-      if (logProfileCache[uid]) return;
-      try {
-        const p = await apiFetch(`/api/user/${uid}/profile`);
-        logProfileCache[uid] = p;
-      } catch(_) {
-        logProfileCache[uid] = { id: uid, username: uid, displayName: uid, avatar: null };
-      }
-    }));
-
+    // แสดงตารางก่อนเลย (ยังไม่มีรูป)
     renderLogsTable(allLogs);
+    // โหลดโปรไฟล์ใน background แบบ batch ทีละ 5
+    const uniqueUids = [...new Set(allLogs.map(l => l.uid).filter(Boolean))].filter(u => !logProfileCache[u]);
+    for (let i = 0; i < uniqueUids.length; i += 5) {
+      const batch = uniqueUids.slice(i, i + 5);
+      await Promise.allSettled(batch.map(async uid => {
+        try {
+          const p = await apiFetch(`/api/user/${uid}/profile`);
+          logProfileCache[uid] = p;
+        } catch(_) {
+          logProfileCache[uid] = { id: uid, username: uid, displayName: uid, avatar: null };
+        }
+      }));
+      // re-render หลังแต่ละ batch เพื่อให้รูปค่อยๆ โผล่
+      const filterUid = document.getElementById('log-uid-input')?.value.trim();
+      const filtered  = filterUid ? allLogs.filter(l => l.uid === filterUid) : allLogs;
+      renderLogsTable(filtered);
+    }
   } catch(e) {
     el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
   }
