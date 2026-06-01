@@ -406,7 +406,163 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
 
+  /* ── Chat Message Log ── */
+  .msg-feed {
+    display: flex; flex-direction: column; gap: 2px;
+    max-width: 900px;
+  }
+  .msg-row {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 6px 12px; border-radius: 6px;
+    transition: background 0.1s;
+  }
+  .msg-row:hover { background: var(--surface2); }
+  .msg-row.deleted {
+    background: rgba(237,66,69,.07);
+    border-left: 3px solid var(--red);
+  }
+  .msg-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    object-fit: cover; flex-shrink: 0; cursor: pointer;
+    margin-top: 1px;
+  }
+  .msg-avatar-fallback {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: var(--accent); display: flex;
+    align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px; color: #fff;
+    flex-shrink: 0; cursor: pointer; margin-top: 1px;
+  }
+  .msg-body { flex: 1; min-width: 0; }
+  .msg-header {
+    display: flex; align-items: baseline; gap: 8px;
+    margin-bottom: 2px; flex-wrap: wrap;
+  }
+  .msg-author {
+    font-weight: 600; font-size: 13px; color: var(--accent);
+    cursor: pointer;
+  }
+  .msg-author:hover { text-decoration: underline; }
+  .msg-uid {
+    font-size: 10px; color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .msg-time {
+    font-size: 11px; color: var(--muted);
+  }
+  .msg-channel {
+    font-size: 11px; color: var(--muted2);
+    background: var(--surface2); border-radius: 4px;
+    padding: 1px 6px;
+  }
+  .msg-deleted-badge {
+    font-size: 10px; font-weight: 700; color: var(--red);
+    background: rgba(237,66,69,.15); border-radius: 4px;
+    padding: 1px 6px; letter-spacing: 0.3px;
+  }
+  .msg-content {
+    font-size: 13px; color: var(--text); line-height: 1.5;
+    word-break: break-word; white-space: pre-wrap;
+  }
+  .msg-content.deleted-text {
+    text-decoration: line-through; color: var(--muted2);
+  }
+  .msg-group-header {
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.7px;
+    padding: 14px 12px 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+  }
+
   input::placeholder { color: var(--muted); }
+
+  /* ── Profile Popup (Discord style) ── */
+  .profile-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    background: transparent;
+  }
+  .profile-popup {
+    position: fixed; z-index: 201;
+    width: 300px;
+    background: #1e2029;
+    border-radius: 10px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.7);
+    overflow: hidden;
+    animation: popIn 0.15s ease;
+  }
+  @keyframes popIn {
+    from { opacity:0; transform: scale(0.92) translateY(6px); }
+    to   { opacity:1; transform: scale(1) translateY(0); }
+  }
+  .profile-banner {
+    height: 72px; width: 100%;
+    object-fit: cover; display: block;
+  }
+  .profile-banner-color {
+    height: 72px; width: 100%;
+  }
+  .profile-avatar-wrap {
+    position: relative; margin: -32px 0 0 14px;
+  }
+  .profile-avatar {
+    width: 80px; height: 80px; border-radius: 50%;
+    border: 6px solid #1e2029;
+    background: #313338; object-fit: cover;
+    display: block;
+  }
+  .profile-avatar-fallback {
+    width: 80px; height: 80px; border-radius: 50%;
+    border: 6px solid #1e2029;
+    background: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; font-weight: 700; color: #fff;
+  }
+  .profile-badge-bot {
+    position: absolute; bottom: 2px; right: -2px;
+    background: #5865f2; border-radius: 4px;
+    font-size: 10px; font-weight: 700; color: #fff;
+    padding: 1px 5px; letter-spacing: 0.3px;
+  }
+  .profile-body {
+    padding: 10px 16px 16px;
+  }
+  .profile-display-name {
+    font-size: 20px; font-weight: 700; line-height: 1.2;
+    margin-top: 8px; word-break: break-word;
+  }
+  .profile-username {
+    font-size: 14px; color: var(--muted2); margin-top: 2px;
+  }
+  .profile-divider {
+    border: none; border-top: 1px solid #2e3545;
+    margin: 12px 0;
+  }
+  .profile-section-title {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.7px;
+    text-transform: uppercase; color: var(--muted2);
+    margin-bottom: 6px;
+  }
+  .profile-info-row {
+    font-size: 13px; color: var(--muted2);
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 4px;
+  }
+  .profile-info-row strong { color: var(--text); }
+  .profile-warn-pills {
+    display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;
+  }
+  .profile-warn-pill {
+    font-size: 11px; font-weight: 600; padding: 3px 8px;
+    border-radius: 20px; display: flex; align-items: center; gap: 4px;
+  }
+  .profile-warn-pill.spam   { background: rgba(237,66,69,.18); color: #ed4245; }
+  .profile-warn-pill.invite { background: rgba(250,166,26,.18); color: #faa61a; }
+  .profile-warn-pill.clean  { background: rgba(59,165,93,.15); color: #3ba55d; }
+  .profile-actions {
+    display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap;
+  }
+  .profile-actions .btn { font-size: 12px; flex: 1; min-width: 70px; justify-content: center; }
 </style>
 </head>
 <body>
@@ -456,6 +612,9 @@
       </button>
       <button class="sidebar-btn" onclick="navTo('logs')" id="nav-logs">
         <span class="icon">📋</span> ประวัติ Logs
+      </button>
+      <button class="sidebar-btn" onclick="navTo('messages')" id="nav-messages">
+        <span class="icon">💬</span> ข้อความทั้งหมด
       </button>
     </div>
     <div class="sidebar-footer">
@@ -525,6 +684,22 @@
       </div>
       <div id="logs-content"><div class="spinner"></div></div>
     </div>
+
+    <div class="page" id="page-messages">
+      <div class="page-title">💬 ข้อความทั้งหมด</div>
+      <div class="page-sub" id="messages-sub">บันทึกข้อความทุกอย่างที่พิมพ์ในเซิร์ฟ (500 ล่าสุด)</div>
+      <!-- Filter bar -->
+      <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center" id="msg-filter-bar">
+        <input type="text" id="msg-uid-input" placeholder="User ID..." style="width:180px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 10px;outline:none">
+        <input type="text" id="msg-ch-input" placeholder="ชื่อห้อง..." style="width:160px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 10px;outline:none">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted2);cursor:pointer">
+          <input type="checkbox" id="msg-del-only" style="accent-color:var(--red);width:14px;height:14px"> เฉพาะที่ถูกลบ 🗑
+        </label>
+        <button class="btn btn-primary btn-sm" onclick="filterMessages()">🔍 กรอง</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearMsgFilter()">✕ ล้าง</button>
+      </div>
+      <div id="messages-content"><div class="spinner"></div></div>
+    </div>
   </div>
 </div>
 
@@ -539,6 +714,10 @@
 
 <!-- Toast -->
 <div class="toast" id="toast"></div>
+
+<!-- Profile Popup -->
+<div class="profile-overlay" id="profile-overlay" style="display:none" onclick="closeProfilePopup()"></div>
+<div class="profile-popup" id="profile-popup" style="display:none"></div>
 
 <script>
 // ── State ──────────────────────────────────────────────────
@@ -601,6 +780,7 @@ function navTo(page) {
   if (page === 'warns'    && currentGuild) loadWarns(currentGuild.id);
   if (page === 'newaccs'  && currentGuild) loadNewAccs(currentGuild.id);
   if (page === 'logs'     && currentGuild) loadLogs(currentGuild.id);
+  if (page === 'messages' && currentGuild) loadMessages(currentGuild.id);
 }
 
 // ── Guild Selector ──────────────────────────────────────────
@@ -861,6 +1041,143 @@ function discardSettings() {
   loadSettings(currentGuild.id);
 }
 
+// ── Profile Popup ─────────────────────────────────────────────
+// profileCache เก็บโดย uid, ค่าเป็น profile object + warnSpam/warnInvite
+const profilePopupCache = {};
+
+function closeProfilePopup() {
+  document.getElementById('profile-overlay').style.display = 'none';
+  document.getElementById('profile-popup').style.display   = 'none';
+}
+
+async function showProfilePopup(uid, anchorEl, gid) {
+  // โหลดจาก cache หรือ fetch
+  let p = profilePopupCache[uid] || logProfileCache[uid] || null;
+  if (!p) {
+    try {
+      p = await apiFetch(`/api/user/${uid}/profile`);
+    } catch(_) {
+      p = { id: uid, username: uid, displayName: uid, avatar: null };
+    }
+  }
+  // ดึง warn ถ้ายังไม่มี
+  if (p.warnSpam === undefined && gid) {
+    try {
+      const w = await apiFetch(`/api/guild/${gid}/warns`);
+      const entry = (w.warns || []).find(x => x.uid === uid);
+      p = { ...p, warnSpam: entry?.spam || 0, warnInvite: entry?.invite || 0 };
+    } catch(_) { p = { ...p, warnSpam: 0, warnInvite: 0 }; }
+  }
+  profilePopupCache[uid] = p;
+  logProfileCache[uid]   = p;
+
+  const displayName = p.displayName || p.username || uid;
+  const username    = p.username !== displayName ? p.username : null;
+  const createdDate = p.createdAt
+    ? new Date(p.createdAt).toLocaleDateString('th-TH', { year:'numeric', month:'long', day:'numeric' })
+    : '—';
+  const accentHex = p.accentColor
+    ? '#' + p.accentColor.toString(16).padStart(6, '0')
+    : '#5865f2';
+
+  const bannerHtml = p.banner
+    ? `<img class="profile-banner" src="${escHtml(p.banner)}" onerror="this.parentNode.innerHTML='<div class=profile-banner-color style=background:${accentHex}></div>'">`
+    : `<div class="profile-banner-color" style="background:${accentHex}"></div>`;
+
+  const avatarHtml = p.avatar
+    ? `<img class="profile-avatar" src="${escHtml(p.avatar)}" onerror="this.outerHTML='<div class=profile-avatar-fallback>${escHtml((displayName[0]||'?').toUpperCase())}</div>'">`
+    : `<div class="profile-avatar-fallback">${escHtml((displayName[0]||'?').toUpperCase())}</div>`;
+
+  const warnSpam   = p.warnSpam   || 0;
+  const warnInvite = p.warnInvite || 0;
+  const warnHtml = (warnSpam === 0 && warnInvite === 0)
+    ? `<span class="profile-warn-pill clean">✅ ไม่มี Warn</span>`
+    : [
+        warnSpam   > 0 ? `<span class="profile-warn-pill spam">🚫 Spam ×${warnSpam}</span>` : '',
+        warnInvite > 0 ? `<span class="profile-warn-pill invite">🔗 Invite ×${warnInvite}</span>` : '',
+      ].join('');
+
+  const botBadge = p.bot ? `<div class="profile-badge-bot">BOT</div>` : '';
+  const gidAttr  = gid ? `data-gid="${escHtml(gid)}"` : '';
+
+  const popup = document.getElementById('profile-popup');
+  popup.innerHTML = `
+    ${bannerHtml}
+    <div style="position:relative">
+      <div class="profile-avatar-wrap">
+        <div style="position:relative;display:inline-block">
+          ${avatarHtml}
+          ${botBadge}
+        </div>
+      </div>
+    </div>
+    <div class="profile-body">
+      <div class="profile-display-name">${escHtml(displayName)}</div>
+      ${username ? `<div class="profile-username">@${escHtml(username)}</div>` : ''}
+      <hr class="profile-divider">
+      <div class="profile-section-title">ข้อมูล Discord</div>
+      <div class="profile-info-row">🆔 <strong>${escHtml(uid)}</strong></div>
+      <div class="profile-info-row">📅 สร้างบัญชีเมื่อ <strong>${createdDate}</strong></div>
+      <hr class="profile-divider">
+      <div class="profile-section-title">สถานะ Warn</div>
+      <div class="profile-warn-pills">${warnHtml}</div>
+      <div class="profile-actions" ${gidAttr} data-uid="${escHtml(uid)}">
+        <button class="btn btn-sm" style="background:#f97316;color:#fff" onclick="muteFromPopup('${escHtml(uid)}')">🔇 Mute</button>
+        <button class="btn btn-ghost btn-sm" onclick="unmuteFromPopup('${escHtml(uid)}')">🔊 Unmute</button>
+        <button class="btn btn-danger btn-sm" onclick="banFromPopup('${escHtml(uid)}','${escHtml(displayName)}')">🔨 Ban</button>
+      </div>
+    </div>`;
+
+  // คำนวณตำแหน่งไม่ให้ออกนอกจอ
+  popup.style.display = 'block';
+  const rect    = anchorEl.getBoundingClientRect();
+  const popW    = 300, popH = popup.offsetHeight;
+  let left = rect.right + 8;
+  let top  = rect.top;
+  if (left + popW > window.innerWidth  - 8) left = rect.left - popW - 8;
+  if (top  + popH > window.innerHeight - 8) top  = window.innerHeight - popH - 8;
+  if (left < 8) left = 8;
+  if (top  < 8) top  = 8;
+  popup.style.left = left + 'px';
+  popup.style.top  = top  + 'px';
+  document.getElementById('profile-overlay').style.display = 'block';
+}
+
+async function muteFromPopup(uid) {
+  if (!currentGuild) return;
+  const min = prompt('Mute กี่นาที?', '10');
+  if (!min || isNaN(min)) return;
+  try {
+    await apiFetch(`/api/guild/${currentGuild.id}/mute`, {
+      method: 'POST',
+      body: JSON.stringify({ userId: uid, minutes: +min, reason: 'Muted via Panel Profile' }),
+    });
+    showToast(`🔇 Mute ${uid} ${min} นาที สำเร็จ`, 'success');
+    closeProfilePopup();
+  } catch(e) { showToast('❌ Mute ไม่ได้: ' + e.message, 'error'); }
+}
+async function unmuteFromPopup(uid) {
+  if (!currentGuild) return;
+  try {
+    await apiFetch(`/api/guild/${currentGuild.id}/unmute`, {
+      method: 'POST', body: JSON.stringify({ userId: uid }),
+    });
+    showToast(`🔊 Unmute ${uid} สำเร็จ`, 'success');
+    closeProfilePopup();
+  } catch(e) { showToast('❌ Unmute ไม่ได้: ' + e.message, 'error'); }
+}
+async function banFromPopup(uid, name) {
+  if (!currentGuild) return;
+  if (!confirm(`Ban "${name}" (${uid}) ออกจากเซิร์ฟ?`)) return;
+  try {
+    await apiFetch(`/api/guild/${currentGuild.id}/ban`, {
+      method: 'POST', body: JSON.stringify({ userId: uid, reason: 'Banned via Panel Profile' }),
+    });
+    showToast(`🔨 Ban ${name} สำเร็จ`, 'success');
+    closeProfilePopup();
+  } catch(e) { showToast('❌ Ban ไม่ได้: ' + e.message, 'error'); }
+}
+
 // ── Watchlist ───────────────────────────────────────────────
 async function loadWatchlist(gid) {
   const el = document.getElementById('watchlist-content');
@@ -896,12 +1213,12 @@ function watchItem(uid, gid, profile) {
   const name   = profile?.displayName || profile?.username || uid;
   const avatar = profile?.avatar;
   const avatarHtml = avatar
-    ? `<img src="${escHtml(avatar)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">`
-    : `<div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0">${escHtml((name[0]||'?').toUpperCase())}</div>`;
+    ? `<img src="${escHtml(avatar)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0;cursor:pointer" onerror="this.style.display='none'" onclick="event.stopPropagation();showProfilePopup('${escHtml(uid)}',this,'${escHtml(gid)}')">`
+    : `<div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0;cursor:pointer" onclick="event.stopPropagation();showProfilePopup('${escHtml(uid)}',this,'${escHtml(gid)}')">${escHtml((name[0]||'?').toUpperCase())}</div>`;
   return `<div class="watch-item" id="wi_${uid}">
     <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">
       ${avatarHtml}
-      <div style="min-width:0">
+      <div style="min-width:0;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${escHtml(gid)}')">
         <div style="font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(name)}</div>
         <div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${escHtml(uid)}</div>
       </div>
@@ -1167,11 +1484,11 @@ function renderLogsTable(logs) {
             const name   = p.displayName || p.username || uid;
             const avatar = p.avatar;
             const avatarHtml = avatar
-              ? `<img src="${escHtml(avatar)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:7px;flex-shrink:0" onerror="this.style.display='none'">`
-              : `<span style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--accent);align-items:center;justify-content:center;font-weight:700;font-size:12px;margin-right:7px;flex-shrink:0;vertical-align:middle">${escHtml((name[0]||'?').toUpperCase())}</span>`;
+              ? `<img src="${escHtml(avatar)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:7px;flex-shrink:0;cursor:pointer" onerror="this.style.display='none'" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')">`
+              : `<span style="display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--accent);align-items:center;justify-content:center;font-weight:700;font-size:12px;margin-right:7px;flex-shrink:0;vertical-align:middle;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')">${escHtml((name[0]||'?').toUpperCase())}</span>`;
             return `<tr>
               <td class="log-time">${escHtml(time)}</td>
-              <td class="log-uid" onclick="filterByUid('${escHtml(uid)}')" title="คลิกเพื่อกรองเฉพาะ user นี้" style="cursor:pointer;white-space:nowrap">
+              <td class="log-uid" style="white-space:nowrap;cursor:pointer" onclick="showProfilePopup('${escHtml(uid)}',this,'${currentGuild?.id||''}')" title="คลิกเพื่อดูโปรไฟล์">
                 <div style="display:flex;align-items:center">
                   ${avatarHtml}
                   <div>
@@ -1209,6 +1526,100 @@ async function filterByUid(uid) {
 function clearLogFilter() {
   document.getElementById('log-uid-input').value = '';
   renderLogsTable(allLogs);
+}
+
+// ── Messages (Chat Log) ──────────────────────────────────────
+let allMessages = [];
+
+async function loadMessages(gid) {
+  const el = document.getElementById('messages-content');
+  el.innerHTML = '<div class="spinner"></div>';
+  document.getElementById('messages-sub').textContent = 'กำลังโหลด...';
+  try {
+    const data = await apiFetch(`/api/guild/${gid}/messages`);
+    allMessages = data.messages || [];
+    document.getElementById('messages-sub').textContent =
+      `${allMessages.length} ข้อความล่าสุด (สูงสุด 500)`;
+    renderMessages(allMessages);
+  } catch(e) {
+    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
+  }
+}
+
+function renderMessages(msgs) {
+  const el = document.getElementById('messages-content');
+  if (!msgs.length) {
+    el.innerHTML = '<p style="color:var(--muted2);padding:20px 0">ไม่พบข้อความ</p>';
+    return;
+  }
+
+  // group by date
+  const groups = {};
+  msgs.forEach(m => {
+    const d = new Date(m.ts).toLocaleDateString('th-TH', { year:'numeric', month:'long', day:'numeric', weekday:'long' });
+    if (!groups[d]) groups[d] = [];
+    groups[d].push(m);
+  });
+
+  let html = '<div class="msg-feed">';
+  for (const [date, list] of Object.entries(groups)) {
+    html += `<div class="msg-group-header">─── ${escHtml(date)} ───</div>`;
+    list.forEach(m => {
+      const name    = m.tag?.split('#')[0] || m.uid;
+      const timeStr = new Date(m.ts).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit' });
+      const delBadge = m.deleted
+        ? `<span class="msg-deleted-badge">🗑 ถูกลบ${m.deletedAt ? ' ' + new Date(m.deletedAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}) : ''}</span>`
+        : '';
+      const avatarHtml = m.avatar
+        ? `<img class="msg-avatar" src="${escHtml(m.avatar)}" onerror="this.outerHTML='<div class=msg-avatar-fallback onclick=showProfilePopup(&#39;${escHtml(m.uid)}&#39;,this,&#39;${currentGuild?.id||''}&#39;)>${escHtml((name[0]||'?').toUpperCase())}</div>'" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">`
+        : `<div class="msg-avatar-fallback" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">${escHtml((name[0]||'?').toUpperCase())}</div>`;
+
+      html += `
+        <div class="msg-row${m.deleted ? ' deleted' : ''}">
+          ${avatarHtml}
+          <div class="msg-body">
+            <div class="msg-header">
+              <span class="msg-author" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">${escHtml(name)}</span>
+              <span class="msg-uid">${escHtml(m.uid)}</span>
+              <span class="msg-channel">#${escHtml(m.channel)}</span>
+              <span class="msg-time">${escHtml(timeStr)}</span>
+              ${delBadge}
+            </div>
+            <div class="msg-content${m.deleted ? ' deleted-text' : ''}">${escHtml(m.content)}</div>
+          </div>
+        </div>`;
+    });
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function filterMessages() {
+  if (!currentGuild) return;
+  const uid = document.getElementById('msg-uid-input').value.trim();
+  const ch  = document.getElementById('msg-ch-input').value.trim();
+  const del = document.getElementById('msg-del-only').checked;
+  const params = new URLSearchParams();
+  if (uid) params.set('uid', uid);
+  if (ch)  params.set('channel', ch);
+  if (del) params.set('deleted', 'true');
+  const el = document.getElementById('messages-content');
+  el.innerHTML = '<div class="spinner"></div>';
+  try {
+    const data = await apiFetch(`/api/guild/${currentGuild.id}/messages?${params}`);
+    allMessages = data.messages || [];
+    document.getElementById('messages-sub').textContent = `พบ ${allMessages.length} ข้อความ`;
+    renderMessages(allMessages);
+  } catch(e) {
+    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
+  }
+}
+
+function clearMsgFilter() {
+  document.getElementById('msg-uid-input').value = '';
+  document.getElementById('msg-ch-input').value  = '';
+  document.getElementById('msg-del-only').checked = false;
+  if (currentGuild) loadMessages(currentGuild.id);
 }
 
 // ── Toast ────────────────────────────────────────────────────
