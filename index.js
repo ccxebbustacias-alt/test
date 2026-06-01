@@ -65,16 +65,61 @@ const GRABBER_PATH_PATTERNS = [
   /login\.php/i, /auth\.php/i,
 ];
 
-// ── in-memory cache สำหรับ log channel (ไม่ต้อง fetch ทุกครั้ง) ──
-const logChannelCache = new Map(); // guildId → channel | null
+// ── in-memory cache ──────────────────────────────────────
+const settingsCache = new Map(); // guildId → { settings, ts }
+const SETTINGS_TTL  = 30_000;   // refresh ทุก 30 วิ
+
+// โหลด settings จาก Redis (per-guild, cached)
+async function getGuildSettings(guildId) {
+  const now = Date.now();
+  const hit  = settingsCache.get(guildId);
+  if (hit && now - hit.ts < SETTINGS_TTL) return hit.settings;
+  try {
+    const raw = await redis.get(`panelcfg:${guildId}`);
+    const settings = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : {};
+    settingsCache.set(guildId, { settings, ts: now });
+    return settings;
+  } catch { return {}; }
+}
+
+// ค่า default ของ logNotify
+const LOG_NOTIFY_DEFAULTS = {
+  spam:       true,   // Auto Ban / Warn Spam
+  invite:     true,   // Auto Ban / Warn Invite
+  token:      true,   // Anti-Token Grabber
+  ghostPing:  true,   // Ghost Ping
+  watchlist:  true,   // Watchlist Alert
+  raid:       true,   // Raid Detected
+  nuke:       true,   // Nuke Attempt
+  newAccount: true,   // บัญชีใหม่น่าสงสัย
+  memberJoin: false,  // User เข้าเซิร์ฟ (ปิด default — noise มาก)
+  mute:       false,  // Mute/Unmute จาก Panel (ปิด default)
+  ban:        true,   // Ban จาก Panel
+};
 
 // ── helpers ───────────────────────────────────────────────
-function getLog(guild) {
+// ดึง log channel ตาม settings (ถ้าตั้งไว้) หรือ fallback env
+async function getLog(guild) {
   if (!guild) return null;
-  if (logChannelCache.has(guild.id)) return logChannelCache.get(guild.id);
-  const ch = guild.channels.cache.get(LOG_CHANNEL) ?? null;
-  logChannelCache.set(guild.id, ch);
-  return ch;
+  try {
+    const s = await getGuildSettings(guild.id);
+    const chId = s.logChannelId || LOG_CHANNEL;
+    if (!chId) return null;
+    return guild.channels.cache.get(chId) ?? null;
+  } catch {
+    return guild.channels.cache.get(LOG_CHANNEL) ?? null;
+  }
+}
+
+// ตรวจว่า event นี้ควรส่ง log ไปดิสไหม
+async function shouldLog(guildId, eventKey) {
+  try {
+    const s = await getGuildSettings(guildId);
+    const notify = s.logNotify || {};
+    // ถ้าไม่มี key → ใช้ default
+    const def = LOG_NOTIFY_DEFAULTS[eventKey] ?? true;
+    return notify[eventKey] !== undefined ? notify[eventKey] : def;
+  } catch { return true; }
 }
 
 function embed(color, title, desc) {
@@ -114,7 +159,7 @@ async function checkSpam(msg) {
   const warns   = await redis.incr(warnKey);
   redis.expire(warnKey, 60 * 60 * 24).catch(() => {});
 
-  const log = getLog(msg.guild);
+  const log = await getLog(msg.guild);
 
   if (warns <= WARN_BEFORE_BAN) {
     // ลบข้อความ + warn พร้อมกัน
@@ -130,17 +175,18 @@ async function checkSpam(msg) {
         `<@${msg.author.id}> หยุดส่งสแปม! (เตือนครั้งที่ ${warns}/${WARN_BEFORE_BAN})\nอีก ${WARN_BEFORE_BAN - warns + 1} ครั้งจะถูกแบนอัตโนมัติ`)
     ]});
     setTimeout(() => warnMsg.delete().catch(() => {}), 8000);
-    log?.send({ embeds: [embed('#FEE75C', '⚠️ Spam Warn',
-      `**${msg.author.tag}** (\`${msg.author.id}\`) ถูกเตือนสแปมใน <#${msg.channel.id}> (ครั้งที่ ${warns})`)] });
+    if (log && await shouldLog(msg.guild.id, 'spam'))
+      log.send({ embeds: [embed('#FEE75C', '⚠️ Spam Warn',
+        `**${msg.author.tag}** (\`${msg.author.id}\`) ถูกเตือนสแปมใน <#${msg.channel.id}> (ครั้งที่ ${warns})`)] });
   } else {
     try {
       // ban + ลบข้อความ + log พร้อมกัน
       await msg.member.ban({ deleteMessageSeconds: 3600, reason: `Auto-ban: spam (${warns} ครั้ง)` });
       const banEmbed = embed('#ED4245', '🔨 Auto Ban — Spam',
         `**${msg.author.tag}** (\`${msg.author.id}\`) ถูก ban เนื่องจากสแปมซ้ำ ${warns} ครั้ง ในห้อง <#${msg.channel.id}>`);
-      // ทำทั้งสองอย่างพร้อมกัน
+      const canLog = await shouldLog(msg.guild.id, 'spam');
       await Promise.allSettled([
-        log ? log.send({ embeds: [banEmbed] }) : msg.channel.send({ embeds: [banEmbed] }).catch(() => {}),
+        canLog ? (log ? log.send({ embeds: [banEmbed] }) : msg.channel.send({ embeds: [banEmbed] }).catch(() => {})) : Promise.resolve(),
         redis.del(warnKey),
         msg.channel.messages.fetch({ limit: 20 }).then(msgs => {
           const toDelete = msgs.filter(m => m.author.id === msg.author.id && Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
@@ -151,7 +197,8 @@ async function checkSpam(msg) {
       console.error(`[Anti-Spam] Ban failed for ${msg.author.tag}:`, err.message);
       const failEmbed = embed('#ED4245', '❌ Ban Failed',
         `ไม่สามารถ ban **${msg.author.tag}** (\`${msg.author.id}\`) ได้\nสาเหตุ: \`${err.message}\`\n\nตรวจสอบ: role บอทต้องอยู่เหนือ role ของ user + มีสิทธิ์ Ban Members`);
-      (log ? log.send({ embeds: [failEmbed] }) : msg.channel.send({ embeds: [failEmbed] })).catch(() => {});
+      if (log) log.send({ embeds: [failEmbed] }).catch(() => {});
+      else msg.channel.send({ embeds: [failEmbed] }).catch(() => {});
     }
   }
 }
@@ -173,7 +220,8 @@ async function checkInvite(msg) {
   const warns   = await redis.incr(warnKey);
   redis.expire(warnKey, 60 * 60 * 24).catch(() => {});
 
-  const log = getLog(msg.guild);
+  const log = await getLog(msg.guild);
+  const canLog = await shouldLog(msg.guild.id, 'invite');
 
   if (warns <= WARN_BEFORE_BAN) {
     const warnMsg = await msg.channel.send({ embeds: [
@@ -181,15 +229,16 @@ async function checkInvite(msg) {
         `<@${msg.author.id}> ห้ามส่งลิงก์เชิญดิสคอร์ดในเซิร์ฟนี้! (ครั้งที่ ${warns}/${WARN_BEFORE_BAN})\nอีก ${WARN_BEFORE_BAN - warns + 1} ครั้งจะถูกแบนอัตโนมัติ`)
     ]});
     setTimeout(() => warnMsg.delete().catch(() => {}), 8000);
-    log?.send({ embeds: [embed('#FEE75C', '⚠️ Invite Link Warn',
-      `**${msg.author.tag}** (\`${msg.author.id}\`) ส่ง invite ที่ไม่ได้รับอนุญาตใน <#${msg.channel.id}> (ครั้งที่ ${warns})\n\`${blocked.map(m => m[0]).join(', ')}\``)] });
+    if (log && canLog)
+      log.send({ embeds: [embed('#FEE75C', '⚠️ Invite Link Warn',
+        `**${msg.author.tag}** (\`${msg.author.id}\`) ส่ง invite ที่ไม่ได้รับอนุญาตใน <#${msg.channel.id}> (ครั้งที่ ${warns})\n\`${blocked.map(m => m[0]).join(', ')}\``)] });
   } else {
     try {
       await msg.member.ban({ deleteMessageSeconds: 3600, reason: `Auto-ban: invite link (${warns} ครั้ง)` });
       const banEmbed = embed('#ED4245', '🔨 Auto Ban — Invite Link',
         `**${msg.author.tag}** (\`${msg.author.id}\`) ถูก ban เนื่องจากส่ง invite link ซ้ำ ${warns} ครั้ง`);
       await Promise.allSettled([
-        (log ? log.send({ embeds: [banEmbed] }) : msg.channel.send({ embeds: [banEmbed] })).catch(() => {}),
+        canLog ? ((log ? log.send({ embeds: [banEmbed] }) : msg.channel.send({ embeds: [banEmbed] })).catch(() => {})) : Promise.resolve(),
         redis.del(warnKey),
       ]);
     } catch (err) {
@@ -245,7 +294,8 @@ async function checkTokenGrabber(msg) {
     `TOKEN GRABBER DETECTED: ${reasons.join(' | ')}`);
   console.log(`[Anti-Token] ${msg.author.tag} — ${reasons.join(', ')}`);
 
-  const log = getLog(msg.guild);
+  const log = await getLog(msg.guild);
+  const canLog = await shouldLog(msg.guild.id, 'token');
 
   // เตือนใน log channel
   const alertEmbed = new EmbedBuilder()
@@ -274,9 +324,9 @@ async function checkTokenGrabber(msg) {
     });
   }
 
-  (log
-    ? log.send({ embeds: [alertEmbed] })
-    : msg.channel.send({ embeds: [alertEmbed] })
+  (canLog
+    ? (log ? log.send({ embeds: [alertEmbed] }) : msg.channel.send({ embeds: [alertEmbed] }))
+    : Promise.resolve()
   ).catch(() => {});
 }
 
@@ -294,8 +344,11 @@ client.on('messageDelete', async (msg) => {
       logAction(msg.author?.id, msg.guild?.id, `ลบข้อความใน #${msg.channel.name}: "${msg.content?.slice(0, 80)}"`);
       if (msg.mentions.users.size > 0 || msg.mentions.roles.size > 0) {
         logAction(msg.author?.id, msg.guild?.id, `GHOST PING ใน #${msg.channel.name}`);
-        getLog(msg.guild)?.send({ embeds: [embed('#ED4245', '👻 Ghost Ping',
-          `**${msg.author?.tag}** (\`${msg.author?.id}\`) ping แล้วลบใน <#${msg.channel.id}>\n\`${msg.content}\``)] });
+        if (await shouldLog(msg.guild?.id, 'ghostPing')) {
+          const log = await getLog(msg.guild);
+          log?.send({ embeds: [embed('#ED4245', '👻 Ghost Ping',
+            `**${msg.author?.tag}** (\`${msg.author?.id}\`) ping แล้วลบใน <#${msg.channel.id}>\n\`${msg.content}\``)] });
+        }
       }
     })(),
     // mark ข้อความนี้ว่าถูกลบใน msglog
@@ -314,9 +367,10 @@ client.on('messageDelete', async (msg) => {
         await redis.lset(msgKey, idx, JSON.stringify(obj));
       } catch {}
     })(),
-    redis.sismember(`watchlist:${msg.guild?.id}`, msg.author?.id).then(inWatch => {
-      if (inWatch) {
-        getLog(msg.guild)?.send({ embeds: [embed('#FEE75C', '👁 Watchlist Alert — ลบข้อความ',
+    redis.sismember(`watchlist:${msg.guild?.id}`, msg.author?.id).then(async inWatch => {
+      if (inWatch && await shouldLog(msg.guild?.id, 'watchlist')) {
+        const log = await getLog(msg.guild);
+        log?.send({ embeds: [embed('#FEE75C', '👁 Watchlist Alert — ลบข้อความ',
           `**${msg.author?.tag}** (\`${msg.author?.id}\`) ลบข้อความใน <#${msg.channel.id}>\n\`${msg.content?.slice(0, 200)}\``)] });
       }
     }),
@@ -344,16 +398,22 @@ client.on('guildMemberAdd', async (member) => {
 
   // ตรวจ raid + watchlist + new account พร้อมกัน
   const [, watchResult] = await Promise.allSettled([
-    count >= RAID_THRESH
-      ? getLog(member.guild)?.send({ embeds: [embed('#ED4245', '🚨 Raid Detected',
-          `มีคนเข้าเซิร์ฟ **${count}** คนใน ${RAID_WINDOW} วิ\nใช้ \`${PREFIX}lockdown\` ถ้าจำเป็น`)] })
-      : Promise.resolve(),
+    (async () => {
+      if (count >= RAID_THRESH && await shouldLog(member.guild.id, 'raid')) {
+        const log = await getLog(member.guild);
+        log?.send({ embeds: [embed('#ED4245', '🚨 Raid Detected',
+          `มีคนเข้าเซิร์ฟ **${count}** คนใน ${RAID_WINDOW} วิ\nใช้ \`${PREFIX}lockdown\` ถ้าจำเป็น`)] });
+      }
+    })(),
     redis.sismember(`watchlist:${member.guild.id}`, member.user.id),
   ]);
 
   if (watchResult.status === 'fulfilled' && watchResult.value) {
-    getLog(member.guild)?.send({ embeds: [embed('#FEE75C', '👁 Watchlist Alert — เข้าเซิร์ฟ',
-      `**${member.user.tag}** (\`${member.user.id}\`) ที่อยู่ใน watchlist เพิ่งเข้าเซิร์ฟ!`)] });
+    if (await shouldLog(member.guild.id, 'watchlist')) {
+      const log = await getLog(member.guild);
+      log?.send({ embeds: [embed('#FEE75C', '👁 Watchlist Alert — เข้าเซิร์ฟ',
+        `**${member.user.tag}** (\`${member.user.id}\`) ที่อยู่ใน watchlist เพิ่งเข้าเซิร์ฟ!`)] });
+    }
   }
 
   // ── ตรวจบัญชีใหม่ ──────────────────────────────────────
@@ -376,21 +436,24 @@ client.on('guildMemberAdd', async (member) => {
     logAction(member.user.id, member.guild.id,
       `⚠️ NEW ACCOUNT: บัญชีอายุเพียง ${accAgeDays} วัน — จับตาดู`);
 
-    getLog(member.guild)?.send({ embeds: [
-      new EmbedBuilder()
-        .setColor('#FEE75C')
-        .setTitle('🆕 บัญชีใหม่เข้าเซิร์ฟ')
-        .setThumbnail(member.user.displayAvatarURL({ size: 64 }))
-        .setDescription([
-          `**User:** ${member.user.tag} → <@${member.user.id}>`,
-          `**ID:** \`${member.user.id}\``,
-          `**อายุบัญชี:** ${accAgeDays} วัน (น้อยกว่า ${NEW_ACC_DAYS} วัน)`,
-          `**สมัครเมื่อ:** ${new Date(member.user.createdTimestamp).toLocaleString('th-TH')}`,
-          '',
-          '⚠️ กำลังจับตาดู — ดูได้ที่หน้า **"บัญชีน่าสงสัย"** ใน Panel',
-        ].join('\n'))
-        .setTimestamp()
-    ]});
+    if (await shouldLog(member.guild.id, 'newAccount')) {
+      const log = await getLog(member.guild);
+      log?.send({ embeds: [
+        new EmbedBuilder()
+          .setColor('#FEE75C')
+          .setTitle('🆕 บัญชีใหม่เข้าเซิร์ฟ')
+          .setThumbnail(member.user.displayAvatarURL({ size: 64 }))
+          .setDescription([
+            `**User:** ${member.user.tag} → <@${member.user.id}>`,
+            `**ID:** \`${member.user.id}\``,
+            `**อายุบัญชี:** ${accAgeDays} วัน (น้อยกว่า ${NEW_ACC_DAYS} วัน)`,
+            `**สมัครเมื่อ:** ${new Date(member.user.createdTimestamp).toLocaleString('th-TH')}`,
+            '',
+            '⚠️ กำลังจับตาดู — ดูได้ที่หน้า **"บัญชีน่าสงสัย"** ใน Panel',
+          ].join('\n'))
+          .setTimestamp()
+      ]});
+    }
   }
 });
 
@@ -398,8 +461,8 @@ client.on('channelDelete', async (channel) => {
   const key   = `nukes:${channel.guild?.id}`;
   const count = await redis.incr(key);
   if (count === 1) redis.expire(key, 10).catch(() => {});
-  if (count >= NUKE_THRESH) {
-    const log = channel.guild?.channels.cache.get(LOG_CHANNEL);
+  if (count >= NUKE_THRESH && await shouldLog(channel.guild?.id, 'nuke')) {
+    const log = await getLog(channel.guild);
     log?.send({ embeds: [embed('#ED4245', '💣 Nuke Attempt',
       `ลบห้องไปแล้ว **${count}** ห้องใน 10 วิ — ตรวจสอบ Audit Log ทันที!\nใช้ \`${PREFIX}lockdown\` ฉุกเฉิน`)] });
   }
@@ -450,9 +513,10 @@ client.on('messageCreate', async (msg) => {
 
   // ── ตรวจ watchlist — ถ้า user อยู่ใน watchlist แจ้ง log ทันที ──
   if (msg.guild) {
-    redis.sismember(`watchlist:${msg.guild.id}`, msg.author.id).then(inWatch => {
+    redis.sismember(`watchlist:${msg.guild.id}`, msg.author.id).then(async inWatch => {
       if (!inWatch) return;
-      const log = getLog(msg.guild);
+      if (!await shouldLog(msg.guild.id, 'watchlist')) return;
+      const log = await getLog(msg.guild);
       if (!log) return;
       log.send({ embeds: [
         new EmbedBuilder()
@@ -738,6 +802,12 @@ const server = http.createServer(async (req, res) => {
         antiGhostPing:  settings.antiGhostPing  ?? true,
         raidProtect:    settings.raidProtect    ?? true,
         nukeProtect:    settings.nukeProtect    ?? true,
+        // ── logNotify: เปิด/ปิด Discord log แต่ละประเภท ──
+        logNotify: Object.fromEntries(
+          Object.entries(LOG_NOTIFY_DEFAULTS).map(([k, def]) => [
+            k, settings.logNotify?.[k] !== undefined ? settings.logNotify[k] : def
+          ])
+        ),
       },
     });
   }
@@ -747,6 +817,7 @@ const server = http.createServer(async (req, res) => {
     const gid  = u.pathname.split('/')[3];
     const data = await body(req);
     await redis.set(`panelcfg:${gid}`, JSON.stringify(data));
+    settingsCache.delete(gid); // invalidate cache
     console.log(`[Panel] Settings saved for guild ${gid}`);
     return json(res, 200, { ok: true });
   }
