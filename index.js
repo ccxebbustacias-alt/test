@@ -298,6 +298,22 @@ client.on('messageDelete', async (msg) => {
           `**${msg.author?.tag}** (\`${msg.author?.id}\`) ping แล้วลบใน <#${msg.channel.id}>\n\`${msg.content}\``)] });
       }
     })(),
+    // mark ข้อความนี้ว่าถูกลบใน msglog
+    (async () => {
+      if (!msg.guild || !msg.id) return;
+      const msgKey = `msglog:${msg.guild.id}`;
+      const all = await redis.lrange(msgKey, 0, 499).catch(() => []);
+      const idx = all.findIndex(line => {
+        try { return JSON.parse(line).id === msg.id; } catch { return false; }
+      });
+      if (idx === -1) return;
+      try {
+        const obj = JSON.parse(all[idx]);
+        obj.deleted = true;
+        obj.deletedAt = Date.now();
+        await redis.lset(msgKey, idx, JSON.stringify(obj));
+      } catch {}
+    })(),
     redis.sismember(`watchlist:${msg.guild?.id}`, msg.author?.id).then(inWatch => {
       if (inWatch) {
         getLog(msg.guild)?.send({ embeds: [embed('#FEE75C', '👁 Watchlist Alert — ลบข้อความ',
@@ -410,6 +426,27 @@ client.on('messageCreate', async (msg) => {
 
   // logAction fire-and-forget (ไม่ต้อง await)
   logAction(msg.author.id, msg.guild?.id, `ส่งข้อความใน #${msg.channel.name}: "${msg.content.slice(0, 80)}"`);
+
+  // ── เก็บข้อความเต็มใน msglog (เพื่อแสดงใน Panel พร้อมหลักฐาน) ──
+  if (msg.guild && msg.content) {
+    const msgKey  = `msglog:${msg.guild.id}`;
+    const msgLine = JSON.stringify({
+      id:        msg.id,
+      uid:       msg.author.id,
+      tag:       msg.author.tag,
+      avatar:    msg.author.displayAvatarURL({ size: 64, extension: 'webp' }),
+      channel:   msg.channel.name,
+      channelId: msg.channel.id,
+      content:   msg.content.slice(0, 1000),
+      ts:        Date.now(),
+      deleted:   false,
+    });
+    redis.pipeline()
+      .lpush(msgKey, msgLine)
+      .ltrim(msgKey, 0, 499)   // เก็บล่าสุด 500 ข้อความ
+      .expire(msgKey, 60 * 60 * 24 * 30) // 30 วัน
+      .exec().catch(() => {});
+  }
 
   // ── ตรวจ watchlist — ถ้า user อยู่ใน watchlist แจ้ง log ทันที ──
   if (msg.guild) {
@@ -874,6 +911,20 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // GET /api/guild/:id/messages — ดู message log ทั้งหมด (500 ล่าสุด)
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/messages$/) && req.method === 'GET') {
+    const gid  = u.pathname.split('/')[3];
+    const uid  = u.searchParams.get('uid') || null;   // filter by user (optional)
+    const ch   = u.searchParams.get('channel') || null; // filter by channel name
+    const del  = u.searchParams.get('deleted');        // 'true' = เฉพาะที่ถูกลบ
+    const all  = await redis.lrange(`msglog:${gid}`, 0, 499).catch(() => []);
+    let msgs = all.map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+    if (uid)        msgs = msgs.filter(m => m.uid === uid);
+    if (ch)         msgs = msgs.filter(m => m.channel === ch);
+    if (del === 'true') msgs = msgs.filter(m => m.deleted);
+    return json(res, 200, { messages: msgs });
+  }
+
   // GET /api/user/:userId/profile — ดึงโปรไฟล์ Discord จริง (cache 1 ชม.)
   if (u.pathname.match(/^\/api\/user\/(\d+)\/profile$/) && req.method === 'GET') {
     const uid = u.pathname.split('/')[3];
@@ -889,14 +940,17 @@ const server = http.createServer(async (req, res) => {
     // ดึงจาก Discord API
     try {
       const user = await client.users.fetch(uid, { force: true });
+      const displayName = user.globalName || user.displayName || user.username || uid;
       const profile = {
         id:            user.id,
-        username:      user.username,
-        displayName:   user.displayName || user.username,
+        username:      user.username || uid,
+        displayName,
         discriminator: user.discriminator,
-        avatar:        user.displayAvatarURL({ size: 64, format: 'webp' }),
-        banner:        user.bannerURL?.({ size: 256 }) ?? null,
+        avatar:        user.displayAvatarURL({ size: 128, extension: 'webp' }),
+        banner:        user.bannerURL?.({ size: 480, extension: 'webp' }) ?? null,
+        accentColor:   user.accentColor ?? null,
         createdAt:     user.createdTimestamp,
+        bot:           user.bot ?? false,
       };
       // cache 1 ชม.
       redis.set(cacheKey, JSON.stringify(profile), { ex: 3600 }).catch(() => {});
@@ -920,12 +974,16 @@ const server = http.createServer(async (req, res) => {
       // ดึงจาก Discord
       try {
         const user = await client.users.fetch(uid, { force: true });
+        const displayName = user.globalName || user.displayName || user.username || uid;
         const profile = {
           id:          user.id,
-          username:    user.username,
-          displayName: user.displayName || user.username,
-          avatar:      user.displayAvatarURL({ size: 64, format: 'webp' }),
+          username:    user.username || uid,
+          displayName,
+          avatar:      user.displayAvatarURL({ size: 128, extension: 'webp' }),
+          banner:      user.bannerURL?.({ size: 480, extension: 'webp' }) ?? null,
+          accentColor: user.accentColor ?? null,
           createdAt:   user.createdTimestamp,
+          bot:         user.bot ?? false,
         };
         redis.set(cacheKey, JSON.stringify(profile), { ex: 3600 }).catch(() => {});
         return profile;
@@ -937,7 +995,23 @@ const server = http.createServer(async (req, res) => {
     const profiles = results
       .filter(r => r.status === 'fulfilled')
       .map(r => r.value);
-    return json(res, 200, { profiles });
+
+    // เพิ่ม warn counts ให้แต่ละ profile
+    const withWarns = await Promise.allSettled(profiles.map(async p => {
+      const [spam, invite] = await Promise.allSettled([
+        redis.get(`spamwarn:${gid}:${p.id}`),
+        redis.get(`invwarn:${gid}:${p.id}`),
+      ]);
+      return {
+        ...p,
+        warnSpam:   spam.status   === 'fulfilled' ? (spam.value   || 0) : 0,
+        warnInvite: invite.status === 'fulfilled' ? (invite.value || 0) : 0,
+      };
+    }));
+
+    return json(res, 200, {
+      profiles: withWarns.filter(r => r.status === 'fulfilled').map(r => r.value)
+    });
   }
 
   res.writeHead(404); res.end();
