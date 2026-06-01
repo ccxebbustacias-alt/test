@@ -939,24 +939,32 @@ const server = http.createServer(async (req, res) => {
     } catch (_) {}
     // ดึงจาก Discord API
     try {
-      const user = await client.users.fetch(uid, { force: true });
-      const displayName = user.globalName || user.displayName || user.username || uid;
+      // ลอง cache ใน memory ก่อน (Discord.js internal cache)
+      let user = client.users.cache.get(uid);
+      if (!user) {
+        user = await Promise.race([
+          client.users.fetch(uid),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
+        ]);
+      }
+      const displayName = user.globalName || user.username || uid;
       const profile = {
         id:            user.id,
         username:      user.username || uid,
         displayName,
         discriminator: user.discriminator,
         avatar:        user.displayAvatarURL({ size: 128, extension: 'webp' }),
-        banner:        user.bannerURL?.({ size: 480, extension: 'webp' }) ?? null,
+        banner:        null,   // ไม่ fetch banner เพื่อความเร็ว (banner ต้อง force fetch แยก)
         accentColor:   user.accentColor ?? null,
         createdAt:     user.createdTimestamp,
         bot:           user.bot ?? false,
       };
-      // cache 1 ชม.
-      redis.set(cacheKey, JSON.stringify(profile), { ex: 3600 }).catch(() => {});
+      // cache 2 ชม.
+      redis.set(cacheKey, JSON.stringify(profile), { ex: 7200 }).catch(() => {});
       return json(res, 200, profile);
     } catch (err) {
-      return json(res, 404, { error: 'User not found', id: uid });
+      // ส่งข้อมูลขั้นต่ำกลับไปแทน 404 เพื่อไม่ให้ UI พัง
+      return json(res, 200, { id: uid, username: uid, displayName: uid, avatar: null, error: true });
     }
   }
 
@@ -967,29 +975,35 @@ const server = http.createServer(async (req, res) => {
     if (!uids.length) return json(res, 200, { profiles: [] });
 
     const results = await Promise.allSettled(uids.map(async uid => {
-      // ลอง cache ก่อน
+      // ลอง Redis cache ก่อน
       const cacheKey = `discordprofile:${uid}`;
       const cached = await redis.get(cacheKey).catch(() => null);
       if (cached) return typeof cached === 'string' ? JSON.parse(cached) : cached;
-      // ดึงจาก Discord
-      try {
-        const user = await client.users.fetch(uid, { force: true });
-        const displayName = user.globalName || user.displayName || user.username || uid;
-        const profile = {
-          id:          user.id,
-          username:    user.username || uid,
-          displayName,
-          avatar:      user.displayAvatarURL({ size: 128, extension: 'webp' }),
-          banner:      user.bannerURL?.({ size: 480, extension: 'webp' }) ?? null,
-          accentColor: user.accentColor ?? null,
-          createdAt:   user.createdTimestamp,
-          bot:         user.bot ?? false,
-        };
-        redis.set(cacheKey, JSON.stringify(profile), { ex: 3600 }).catch(() => {});
-        return profile;
-      } catch (_) {
-        return { id: uid, username: uid, displayName: uid, avatar: null };
+      // ลอง Discord.js memory cache
+      let user = client.users.cache.get(uid);
+      if (!user) {
+        try {
+          user = await Promise.race([
+            client.users.fetch(uid),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
+          ]);
+        } catch (_) {
+          return { id: uid, username: uid, displayName: uid, avatar: null };
+        }
       }
+      const displayName = user.globalName || user.username || uid;
+      const profile = {
+        id:          user.id,
+        username:    user.username || uid,
+        displayName,
+        avatar:      user.displayAvatarURL({ size: 128, extension: 'webp' }),
+        banner:      null,
+        accentColor: user.accentColor ?? null,
+        createdAt:   user.createdTimestamp,
+        bot:         user.bot ?? false,
+      };
+      redis.set(cacheKey, JSON.stringify(profile), { ex: 7200 }).catch(() => {});
+      return profile;
     }));
 
     const profiles = results
