@@ -887,7 +887,17 @@ async function loadWatchlist(gid) {
 function watchItem(uid, gid) {
   return `<div class="watch-item" id="wi_${uid}">
     <span class="watch-uid">👤 ${escHtml(uid)}</span>
-    <button class="btn btn-danger btn-sm" onclick="removeFromWatchlist('${uid}','${gid}')">ลบ</button>
+    <div style="display:flex;gap:6px;align-items:center">
+      <select id="mute-min-${uid}" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:12px;padding:4px 8px;outline:none">
+        <option value="5">5 นาที</option>
+        <option value="10" selected>10 นาที</option>
+        <option value="30">30 นาที</option>
+        <option value="60">60 นาที</option>
+      </select>
+      <button class="btn btn-sm" style="background:#f97316;color:#fff" onclick="muteWatchUser('${uid}','${gid}')">🔇 Mute</button>
+      <button class="btn btn-ghost btn-sm" onclick="unmuteWatchUser('${uid}','${gid}')">🔊</button>
+      <button class="btn btn-danger btn-sm" onclick="removeFromWatchlist('${uid}','${gid}')">ลบ</button>
+    </div>
   </div>`;
 }
 async function addToWatchlist() {
@@ -913,6 +923,31 @@ async function removeFromWatchlist(uid, gid) {
   });
   document.getElementById('wi_'+uid)?.remove();
   showToast(`🗑 ลบ ${uid} แล้ว`, 'success');
+}
+
+async function muteWatchUser(uid, gid) {
+  const minutes = parseInt(document.getElementById(`mute-min-${uid}`)?.value || '10');
+  try {
+    await apiFetch(`/api/guild/${gid}/mute`, {
+      method: 'POST',
+      body: JSON.stringify({ userId: uid, minutes, reason: 'Muted via Panel — Watchlist' }),
+    });
+    showToast(`🔇 Mute ${uid} ${minutes} นาที สำเร็จ`, 'success');
+  } catch(e) {
+    showToast('❌ Mute ไม่ได้: ' + e.message, 'error');
+  }
+}
+
+async function unmuteWatchUser(uid, gid) {
+  try {
+    await apiFetch(`/api/guild/${gid}/unmute`, {
+      method: 'POST',
+      body: JSON.stringify({ userId: uid }),
+    });
+    showToast(`🔊 Unmute ${uid} สำเร็จ`, 'success');
+  } catch(e) {
+    showToast('❌ Unmute ไม่ได้: ' + e.message, 'error');
+  }
 }
 
 // ── New Accounts ─────────────────────────────────────────────
