@@ -874,6 +874,72 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // GET /api/user/:userId/profile — ดึงโปรไฟล์ Discord จริง (cache 1 ชม.)
+  if (u.pathname.match(/^\/api\/user\/(\d+)\/profile$/) && req.method === 'GET') {
+    const uid = u.pathname.split('/')[3];
+    // ลอง cache ก่อน
+    const cacheKey = `discordprofile:${uid}`;
+    try {
+      const cached = await redis.get(cacheKey).catch(() => null);
+      if (cached) {
+        const d = typeof cached === 'string' ? JSON.parse(cached) : cached;
+        return json(res, 200, d);
+      }
+    } catch (_) {}
+    // ดึงจาก Discord API
+    try {
+      const user = await client.users.fetch(uid, { force: true });
+      const profile = {
+        id:            user.id,
+        username:      user.username,
+        displayName:   user.displayName || user.username,
+        discriminator: user.discriminator,
+        avatar:        user.displayAvatarURL({ size: 64, format: 'webp' }),
+        banner:        user.bannerURL?.({ size: 256 }) ?? null,
+        createdAt:     user.createdTimestamp,
+      };
+      // cache 1 ชม.
+      redis.set(cacheKey, JSON.stringify(profile), { ex: 3600 }).catch(() => {});
+      return json(res, 200, profile);
+    } catch (err) {
+      return json(res, 404, { error: 'User not found', id: uid });
+    }
+  }
+
+  // GET /api/guild/:id/watchlist-profiles — watchlist + โปรไฟล์ Discord จริง
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/watchlist-profiles$/) && req.method === 'GET') {
+    const gid   = u.pathname.split('/')[3];
+    const uids  = await redis.smembers(`watchlist:${gid}`).catch(() => []);
+    if (!uids.length) return json(res, 200, { profiles: [] });
+
+    const results = await Promise.allSettled(uids.map(async uid => {
+      // ลอง cache ก่อน
+      const cacheKey = `discordprofile:${uid}`;
+      const cached = await redis.get(cacheKey).catch(() => null);
+      if (cached) return typeof cached === 'string' ? JSON.parse(cached) : cached;
+      // ดึงจาก Discord
+      try {
+        const user = await client.users.fetch(uid, { force: true });
+        const profile = {
+          id:          user.id,
+          username:    user.username,
+          displayName: user.displayName || user.username,
+          avatar:      user.displayAvatarURL({ size: 64, format: 'webp' }),
+          createdAt:   user.createdTimestamp,
+        };
+        redis.set(cacheKey, JSON.stringify(profile), { ex: 3600 }).catch(() => {});
+        return profile;
+      } catch (_) {
+        return { id: uid, username: uid, displayName: uid, avatar: null };
+      }
+    }));
+
+    const profiles = results
+      .filter(r => r.status === 'fulfilled')
+      .map(r => r.value);
+    return json(res, 200, { profiles });
+  }
+
   res.writeHead(404); res.end();
 });
 
