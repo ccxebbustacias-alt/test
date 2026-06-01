@@ -33,6 +33,8 @@ const SPAM_MSG_LIMIT  = 1;
 const SPAM_WINDOW_SEC = 5;
 const WARN_BEFORE_BAN = 0;
 
+const NEW_ACC_DAYS = 30; // บัญชีอายุน้อยกว่านี้ → แจ้งเตือน + จับตาดู
+
 const INVITE_REGEX    = /discord(?:\.gg|(?:app)?\.com\/invite)\/([a-zA-Z0-9\-]+)/gi;
 const ALLOWED_INVITES = (process.env.ALLOWED_INVITES || '')
   .split(',').map(c => c.trim().toLowerCase()).filter(Boolean);
@@ -316,14 +318,15 @@ client.on('messageUpdate', async (oldMsg, newMsg) => {
 });
 
 client.on('guildMemberAdd', async (member) => {
+  const accAgeDays = Math.floor((Date.now() - member.user.createdTimestamp) / 86400000);
   logAction(member.user.id, member.guild.id,
-    `เข้าเซิร์ฟ (บัญชีอายุ ${Math.floor((Date.now() - member.user.createdTimestamp) / 86400000)} วัน)`);
+    `เข้าเซิร์ฟ (บัญชีอายุ ${accAgeDays} วัน)`);
 
   const key   = `joins:${member.guild.id}`;
   const count = await redis.incr(key);
   if (count === 1) redis.expire(key, RAID_WINDOW).catch(() => {});
 
-  // ตรวจ raid + watchlist พร้อมกัน
+  // ตรวจ raid + watchlist + new account พร้อมกัน
   const [, watchResult] = await Promise.allSettled([
     count >= RAID_THRESH
       ? getLog(member.guild)?.send({ embeds: [embed('#ED4245', '🚨 Raid Detected',
@@ -335,6 +338,43 @@ client.on('guildMemberAdd', async (member) => {
   if (watchResult.status === 'fulfilled' && watchResult.value) {
     getLog(member.guild)?.send({ embeds: [embed('#FEE75C', '👁 Watchlist Alert — เข้าเซิร์ฟ',
       `**${member.user.tag}** (\`${member.user.id}\`) ที่อยู่ใน watchlist เพิ่งเข้าเซิร์ฟ!`)] });
+  }
+
+  // ── ตรวจบัญชีใหม่ ──────────────────────────────────────
+  if (accAgeDays < NEW_ACC_DAYS) {
+    // บันทึกลง Redis key: newaccs:guildId → set ของ userId
+    redis.sadd(`newaccs:${member.guild.id}`, member.user.id).catch(() => {});
+    // เก็บข้อมูลรายละเอียดไว้ด้วย
+    redis.set(
+      `newaccinfo:${member.guild.id}:${member.user.id}`,
+      JSON.stringify({
+        id:       member.user.id,
+        tag:      member.user.tag,
+        avatar:   member.user.displayAvatarURL({ size: 64 }),
+        ageDays:  accAgeDays,
+        joinedAt: Date.now(),
+      }),
+      { ex: 60 * 60 * 24 * 30 } // เก็บ 30 วัน
+    ).catch(() => {});
+
+    logAction(member.user.id, member.guild.id,
+      `⚠️ NEW ACCOUNT: บัญชีอายุเพียง ${accAgeDays} วัน — จับตาดู`);
+
+    getLog(member.guild)?.send({ embeds: [
+      new EmbedBuilder()
+        .setColor('#FEE75C')
+        .setTitle('🆕 บัญชีใหม่เข้าเซิร์ฟ')
+        .setThumbnail(member.user.displayAvatarURL({ size: 64 }))
+        .setDescription([
+          `**User:** ${member.user.tag} → <@${member.user.id}>`,
+          `**ID:** \`${member.user.id}\``,
+          `**อายุบัญชี:** ${accAgeDays} วัน (น้อยกว่า ${NEW_ACC_DAYS} วัน)`,
+          `**สมัครเมื่อ:** ${new Date(member.user.createdTimestamp).toLocaleString('th-TH')}`,
+          '',
+          '⚠️ กำลังจับตาดู — ดูได้ที่หน้า **"บัญชีน่าสงสัย"** ใน Panel',
+        ].join('\n'))
+        .setTimestamp()
+    ]});
   }
 });
 
@@ -676,6 +716,105 @@ const server = http.createServer(async (req, res) => {
     await Promise.allSettled([
       redis.del(`spamwarn:${gid}:${userId}`),
       redis.del(`invwarn:${gid}:${userId}`),
+    ]);
+    return json(res, 200, { ok: true });
+  }
+
+  // GET /api/guild/:id/actionlogs — ดู server-wide action log (50 รายการล่าสุด)
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/actionlogs$/) && req.method === 'GET') {
+    const gid = u.pathname.split('/')[3];
+    // ดึง key userlog:gid:* ทั้งหมด แล้วรวม log
+    const keys = await redis.keys(`userlog:${gid}:*`).catch(() => []);
+    if (!keys.length) return json(res, 200, { logs: [] });
+
+    const results = await Promise.allSettled(keys.map(k => redis.lrange(k, 0, 9)));
+    const logs = [];
+    results.forEach((r, i) => {
+      if (r.status !== 'fulfilled') return;
+      const uid = keys[i].split(':')[2];
+      (r.value || []).forEach(line => logs.push({ uid, line }));
+    });
+    // sort โดย timestamp ที่อยู่ใน line
+    logs.sort((a, b) => b.line.localeCompare(a.line));
+    return json(res, 200, { logs: logs.slice(0, 100) });
+  }
+
+  // GET /api/guild/:id/warns — ดู warn summary ของทุก user
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/warns$/) && req.method === 'GET') {
+    const gid = u.pathname.split('/')[3];
+    const [spamKeys, invKeys] = await Promise.allSettled([
+      redis.keys(`spamwarn:${gid}:*`),
+      redis.keys(`invwarn:${gid}:*`),
+    ]);
+    const allUids = new Set([
+      ...(spamKeys.status === 'fulfilled' ? spamKeys.value.map(k => k.split(':')[2]) : []),
+      ...(invKeys.status === 'fulfilled'  ? invKeys.value.map(k => k.split(':')[2])  : []),
+    ]);
+    if (!allUids.size) return json(res, 200, { warns: [] });
+
+    const warns = await Promise.allSettled([...allUids].map(async uid => {
+      const [s, i] = await Promise.allSettled([
+        redis.get(`spamwarn:${gid}:${uid}`),
+        redis.get(`invwarn:${gid}:${uid}`),
+      ]);
+      return {
+        uid,
+        spam:   s.status === 'fulfilled' ? (s.value || 0) : 0,
+        invite: i.status === 'fulfilled' ? (i.value || 0) : 0,
+      };
+    }));
+    const result = warns
+      .filter(r => r.status === 'fulfilled')
+      .map(r => r.value)
+      .filter(w => w.spam > 0 || w.invite > 0)
+      .sort((a, b) => (b.spam + b.invite) - (a.spam + a.invite));
+    return json(res, 200, { warns: result });
+  }
+
+  // GET /api/guild/:id/newaccs — บัญชีใหม่ที่น่าสงสัย
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/newaccs$/) && req.method === 'GET') {
+    const gid  = u.pathname.split('/')[3];
+    const uids = await redis.smembers(`newaccs:${gid}`).catch(() => []);
+    if (!uids.length) return json(res, 200, { accounts: [] });
+
+    const infos = await Promise.allSettled(
+      uids.map(uid => redis.get(`newaccinfo:${gid}:${uid}`))
+    );
+    const accounts = infos
+      .map((r, i) => {
+        if (r.status !== 'fulfilled' || !r.value) return null;
+        const d = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+        return d;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.joinedAt - a.joinedAt);
+    return json(res, 200, { accounts });
+  }
+
+  // POST /api/guild/:id/ban — ban user ด้วย ID ตรงๆ
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/ban$/) && req.method === 'POST') {
+    const gid  = u.pathname.split('/')[3];
+    const { userId, reason } = await body(req);
+    const guild = client.guilds.cache.get(gid);
+    if (!guild) return json(res, 404, { error: 'Guild not found' });
+    try {
+      await guild.members.ban(userId, { reason: reason || 'Banned via Panel', deleteMessageSeconds: 0 });
+      // ลบออกจาก newaccs set
+      redis.srem(`newaccs:${gid}`, userId).catch(() => {});
+      console.log(`[Panel] Banned ${userId} from guild ${gid}`);
+      return json(res, 200, { ok: true });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
+  }
+
+  // POST /api/guild/:id/dismiss-newacc — ปิด alert บัญชีนี้
+  if (u.pathname.match(/^\/api\/guild\/(\d+)\/dismiss-newacc$/) && req.method === 'POST') {
+    const gid  = u.pathname.split('/')[3];
+    const { userId } = await body(req);
+    await Promise.allSettled([
+      redis.srem(`newaccs:${gid}`, userId),
+      redis.del(`newaccinfo:${gid}:${userId}`),
     ]);
     return json(res, 200, { ok: true });
   }
