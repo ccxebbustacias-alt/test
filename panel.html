@@ -378,7 +378,7 @@
   .log-uid  { font-family: 'IBM Plex Mono', monospace; color: var(--accent); cursor:pointer; white-space: nowrap; }
   .log-uid:hover { text-decoration: underline; }
   .log-time { color: var(--muted2); white-space: nowrap; }
-  .log-action { color: var(--text); line-height: 1.5; }
+  .log-action { color: var(--text); line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-width: 600px; }
   .log-card {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 12px; overflow: hidden;
@@ -971,6 +971,38 @@ function buildSettingsHTML(data) {
       </div>
     </div>
 
+    <!-- Log Notify -->
+    <div class="settings-card" style="grid-column: 1 / -1">
+      <div class="settings-card-title">🔔 การแจ้งเตือนใน Discord (Log Channel)</div>
+      <p style="font-size:12px;color:var(--muted2);margin-bottom:14px">เลือกว่าบอทจะส่ง embed ไปยัง Log Channel ในดิสสำหรับเหตุการณ์ไหนบ้าง — Panel ยังบันทึกทุกอย่างเหมือนเดิม</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0">
+        ${[
+          ['spam',       '🚫', 'Spam — Auto Warn / Ban',              true],
+          ['invite',     '🔗', 'Invite Link — Auto Warn / Ban',       true],
+          ['token',      '🪝', 'Token Grabber — Auto Ban',            true],
+          ['ghostPing',  '👻', 'Ghost Ping',                          true],
+          ['watchlist',  '👁', 'Watchlist Alert (ส่ง / ลบ / เข้าเซิร์ฟ)', true],
+          ['raid',       '🚨', 'Raid Detected',                       true],
+          ['nuke',       '💣', 'Nuke Attempt',                        true],
+          ['newAccount', '🆕', 'บัญชีใหม่น่าสงสัย',                  true],
+          ['memberJoin', '🚪', 'User เข้าเซิร์ฟ (ทุกคน)',            false],
+          ['mute',       '🔇', 'Mute / Unmute จาก Panel',            false],
+          ['ban',        '🔨', 'Ban จาก Panel',                       true],
+        ].map(([key, icon, label, defVal]) => {
+          const checked = s.logNotify?.[key] !== undefined ? s.logNotify[key] : defVal;
+          return `
+          <div class="toggle-row">
+            <span class="toggle-label"><span class="ticon">${icon}</span>${label}</span>
+            <label class="toggle">
+              <input type="checkbox" id="lntog_${key}" ${checked ? 'checked' : ''}
+                onchange="onLogNotifyChange('${key}', this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
   </div>`;
 }
 
@@ -989,6 +1021,14 @@ function getCheckedValues(prefix) {
 function onSettingChange(key, value) {
   if (!currentSettings) return;
   currentSettings[key] = value;
+  dirty = true;
+  document.getElementById('save-bar').classList.add('visible');
+}
+
+function onLogNotifyChange(key, value) {
+  if (!currentSettings) return;
+  if (!currentSettings.logNotify) currentSettings.logNotify = {};
+  currentSettings.logNotify[key] = value;
   dirty = true;
   document.getElementById('save-bar').classList.add('visible');
 }
@@ -1121,6 +1161,9 @@ async function showProfilePopup(uid, anchorEl, gid) {
       <hr class="profile-divider">
       <div class="profile-section-title">สถานะ Warn</div>
       <div class="profile-warn-pills">${warnHtml}</div>
+      <div style="margin-top:12px">
+        <button class="btn btn-ghost btn-sm" style="width:100%;justify-content:center;color:var(--accent);border-color:var(--accent)" onclick="viewUserMessages('${escHtml(uid)}');closeProfilePopup()">💬 ดูประวัติข้อความทั้งหมด</button>
+      </div>
       <div class="profile-actions" ${gidAttr} data-uid="${escHtml(uid)}">
         <button class="btn btn-sm" style="background:#f97316;color:#fff" onclick="muteFromPopup('${escHtml(uid)}')">🔇 Mute</button>
         <button class="btn btn-ghost btn-sm" onclick="unmuteFromPopup('${escHtml(uid)}')">🔊 Unmute</button>
@@ -1594,7 +1637,10 @@ function renderMessages(msgs) {
       const name    = m.tag?.split('#')[0] || m.uid;
       const timeStr = new Date(m.ts).toLocaleTimeString('th-TH', { hour:'2-digit', minute:'2-digit' });
       const delBadge = m.deleted
-        ? `<span class="msg-deleted-badge">🗑 ถูกลบ${m.deletedAt ? ' ' + new Date(m.deletedAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}) : ''}</span>`
+        ? `<span class="msg-deleted-badge">🗑 ถูกลบ${m.deletedAt ? ' เวลา ' + new Date(m.deletedAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}) : ''}</span>`
+        : '';
+      const deletedContentNote = m.deleted
+        ? `<div style="font-size:11px;color:var(--red);margin-top:3px">⚠️ ข้อความนี้ถูกลบแล้ว แต่ยังบันทึกไว้</div>`
         : '';
       const avatarHtml = m.avatar
         ? `<img class="msg-avatar" src="${escHtml(m.avatar)}" onerror="this.outerHTML='<div class=msg-avatar-fallback onclick=showProfilePopup(&#39;${escHtml(m.uid)}&#39;,this,&#39;${currentGuild?.id||''}&#39;)>${escHtml((name[0]||'?').toUpperCase())}</div>'" onclick="showProfilePopup('${escHtml(m.uid)}',this,'${currentGuild?.id||''}')">`
@@ -1612,12 +1658,36 @@ function renderMessages(msgs) {
               ${delBadge}
             </div>
             <div class="msg-content${m.deleted ? ' deleted-text' : ''}">${escHtml(m.content)}</div>
+            ${deletedContentNote}
           </div>
         </div>`;
     });
   }
   html += '</div>';
   el.innerHTML = html;
+}
+
+// กดดูข้อความของ user คนนั้นจาก profile popup
+async function viewUserMessages(uid) {
+  if (!currentGuild) return;
+  // ไปหน้า messages แล้วกรองทันที
+  navTo('messages');
+  document.getElementById('msg-uid-input').value = uid;
+  document.getElementById('msg-ch-input').value  = '';
+  document.getElementById('msg-del-only').checked = false;
+  const el = document.getElementById('messages-content');
+  el.innerHTML = '<div class="spinner"></div>';
+  try {
+    const params = new URLSearchParams({ uid });
+    const data = await apiFetch(`/api/guild/${currentGuild.id}/messages?${params}`);
+    allMessages = data.messages || [];
+    const p = logProfileCache[uid];
+    const name = p?.displayName || p?.username || uid;
+    document.getElementById('messages-sub').textContent = `ข้อความของ ${name} — พบ ${allMessages.length} ข้อความ`;
+    renderMessages(allMessages);
+  } catch(e) {
+    el.innerHTML = `<p style="color:var(--red)">โหลดไม่ได้: ${e.message}</p>`;
+  }
 }
 
 async function filterMessages() {
