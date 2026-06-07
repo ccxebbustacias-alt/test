@@ -535,7 +535,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── Serve panel.html ──────────────────────────────────────────────────────
   if (pathname === '/' || pathname === '/panel') {
-    const html = fs.readFileSync(path.join(__dirname, '..', 'panel.html'), 'utf8');
+    const html = fs.readFileSync(path.join(__dirname, 'panel.html'), 'utf8');
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(html);
     return;
