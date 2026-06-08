@@ -705,10 +705,46 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ─── Keep-alive (Render free tier) ───────────────────────────────────────────
-setInterval(() => {
-  http.get(`http://localhost:${PORT}/`).on('error', () => {});
-}, 14 * 60 * 1000); // ping ตัวเองทุก 14 นาที
+// Render free tier จะ sleep เมื่อไม่มี request จากภายนอก
+// ดังนั้นต้องใช้ RENDER_EXTERNAL_URL เพื่อ ping ตัวเองผ่าน public URL
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL;
+
+if (RENDER_EXTERNAL_URL) {
+  // ping ผ่าน public URL ทุก 14 นาที เพื่อป้องกัน sleep
+  setInterval(() => {
+    const pingUrl = `${RENDER_EXTERNAL_URL}/`;
+    const protocol = pingUrl.startsWith('https') ? require('https') : http;
+    protocol.get(pingUrl, (res) => {
+      console.log(`[Keep-alive] Pinged ${pingUrl} → ${res.statusCode}`);
+    }).on('error', (err) => {
+      console.warn(`[Keep-alive] Ping failed: ${err.message}`);
+    });
+  }, 14 * 60 * 1000); // ทุก 14 นาที
+  console.log(`[Keep-alive] จะ ping ${RENDER_EXTERNAL_URL} ทุก 14 นาที`);
+} else {
+  // fallback: ping localhost (ช่วยได้บางส่วน)
+  setInterval(() => {
+    http.get(`http://localhost:${PORT}/`).on('error', () => {});
+  }, 14 * 60 * 1000);
+  console.warn('[Keep-alive] ไม่พบ RENDER_EXTERNAL_URL — ใช้ localhost ping แทน (อาจ sleep ได้)');
+}
+
+// ─── Bot reconnect handler ────────────────────────────────────────────────────
+client.on('disconnect', () => {
+  console.warn('[Bot] Disconnected! กำลัง reconnect...');
+});
+client.on('error', (err) => {
+  console.error('[Bot] Error:', err.message);
+});
+client.on('shardError', (err) => {
+  console.error('[Bot] Shard error:', err.message);
+});
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 server.listen(PORT, () => console.log(`🌐 Panel server running on port ${PORT}`));
-client.login(DISCORD_TOKEN);
+client.login(DISCORD_TOKEN).then(() => {
+  console.log('[Bot] Login สำเร็จ! บอทออนแล้ว ✅');
+}).catch((err) => {
+  console.error('[Bot] Login ล้มเหลว:', err.message);
+  process.exit(1);
+});
